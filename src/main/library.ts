@@ -225,7 +225,8 @@ export class Library extends EventEmitter<LibraryEvents> {
       followSymlinks: false,
       // 書き込み途中のファイルを掴まないよう、サイズが安定するまで待つ
       awaitWriteFinish: { stabilityThreshold: 400, pollInterval: 100 },
-      ignored: (target: string) => path.basename(target).startsWith('.')
+      // 隠しフォルダは無視する。ただしルート自体が隠しフォルダの場合は監視する
+      ignored: (target: string) => target !== rootPath && path.basename(target).startsWith('.')
     })
 
     watcher.on('add', (file) => this.queueUpsert(file))

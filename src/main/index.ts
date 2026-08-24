@@ -18,10 +18,12 @@ let context: AppContext | null = null
 
 /**
  * 起動時にルートフォルダを指定できるようにする。
- * `image-viewer --root <path>`、またはパッケージ版では位置引数のフォルダパス。
+ * `image-viewer --root <path>`、環境変数 IMAGE_VIEWER_ROOT、
+ * またはパッケージ版では位置引数のフォルダパス。
  */
-function rootFromCommandLine(argv: string[]): string | null {
+function startupRoot(argv: string[], env: NodeJS.ProcessEnv): string | null {
   const candidates: string[] = []
+  if (env.IMAGE_VIEWER_ROOT) candidates.push(env.IMAGE_VIEWER_ROOT)
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]
@@ -163,7 +165,7 @@ if (!app.requestSingleInstanceLock()) {
     createWindow()
 
     // コマンドラインでの指定を優先し、なければ前回開いていたフォルダを復帰する
-    const cliRoot = rootFromCommandLine(process.argv)
+    const cliRoot = startupRoot(process.argv, process.env)
     if (cliRoot !== null) {
       const rootId = await context.library.setRoot(cliRoot)
       context.db.setSetting(LAST_ROOT_KEY, String(rootId))
@@ -194,12 +196,24 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
 })
 
-app.on('before-quit', () => {
+let shuttingDown = false
+
+// 終了前にワーカーと監視を止め、DB を確実に閉じる
+app.on('before-quit', (event) => {
+  if (!context || shuttingDown) return
+  shuttingDown = true
+  event.preventDefault()
+
   void (async () => {
-    if (!context) return
-    await context.tagger.dispose()
-    await context.library.stop()
-    context.db.close()
+    const current = context
     context = null
+    try {
+      await current?.tagger.dispose()
+      await current?.library.stop()
+      current?.db.close()
+    } catch (error) {
+      console.error('[shutdown]', error)
+    }
+    app.quit()
   })()
 })

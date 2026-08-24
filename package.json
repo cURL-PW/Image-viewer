@@ -10,12 +10,11 @@
     "dev": "electron-vite dev",
     "build": "npm run typecheck && electron-vite build",
     "start": "electron-vite preview",
-    "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
-    "lint": "eslint . --ext .ts,.tsx",
+    "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json && tsc --noEmit -p tsconfig.e2e.json",
     "test": "vitest run",
     "package": "npm run build && electron-builder --dir",
     "dist": "npm run build && electron-builder",
-    "e2e": "playwright test"
+    "e2e": "npm run build && playwright test"
   },
   "dependencies": {
     "chokidar": "^5.0.0",
@@ -37,5 +36,39 @@
     "vite": "^7.0.0",
     "vitest": "^3.2.0",
     "zustand": "^5.0.15"
+  },
+  "build": {
+    "appId": "dev.curlpw.image-viewer",
+    "productName": "Image Viewer",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "out/**/*",
+      "package.json"
+    ],
+    "npmRebuild": false,
+    "asarUnpack": [
+      "**/node_modules/sharp/**",
+      "**/node_modules/@img/**",
+      "**/node_modules/onnxruntime-node/**"
+    ],
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    },
+    "mac": {
+      "target": [
+        "dmg"
+      ],
+      "category": "public.app-category.photography"
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "category": "Graphics"
+    }
   }
 }

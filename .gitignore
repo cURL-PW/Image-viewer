@@ -5,3 +5,4 @@ release/
 e2e/.output/
 *.log
 .DS_Store
+*.tsbuildinfo

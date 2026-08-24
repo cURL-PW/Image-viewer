@@ -15,6 +15,11 @@ import type {
 
 /** ライブラリ変更後の再クエリをまとめるための待ち時間 (ms) */
 const REQUERY_DEBOUNCE = 250
+/**
+ * タグ付け完了通知は画像 1 枚ごとに飛んでくる。表示中の一覧が丸ごと入れ替わる
+ * ほどの変化ではないので、ライブラリ変更よりも長い間隔でまとめる。
+ */
+const TAGGED_DEBOUNCE = 1200
 
 interface State {
   root: RootInfo | null
@@ -89,14 +94,14 @@ export const useStore = create<State & Actions>((set, get) => {
   let initStarted = false
   const inFlightImages = new Set<number>()
 
-  /** 連続するライブラリ変更をまとめて 1 回だけ再クエリする。 */
-  const scheduleRefresh = (): void => {
+  /** 連続する変更をまとめて 1 回だけ再クエリする。先に入っている予約を優先する。 */
+  const scheduleRefresh = (delay = REQUERY_DEBOUNCE): void => {
     if (requeryTimer) return
     requeryTimer = setTimeout(() => {
       requeryTimer = null
       void get().refresh()
       void get().refreshTags()
-    }, REQUERY_DEBOUNCE)
+    }, delay)
   }
 
   const currentQuery = (): ImageQuery => {
@@ -172,7 +177,7 @@ export const useStore = create<State & Actions>((set, get) => {
 
       window.api.onScanProgress((scanProgress) => set({ scan: scanProgress }))
       window.api.onIndexProgress((indexProgress) => set({ index: indexProgress }))
-      window.api.onImageTagged(() => scheduleRefresh())
+      window.api.onImageTagged(() => scheduleRefresh(TAGGED_DEBOUNCE))
 
       if (root) {
         await Promise.all([get().refreshTree(), get().refresh()])
