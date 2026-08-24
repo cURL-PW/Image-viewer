@@ -1,0 +1,8 @@
+tag_id,name,category,count
+0,red_image,0,1000
+1,green_image,0,1000
+2,blue_image,0,1000
+3,bright,0,1000
+4,warm_character,4,1000
+5,general,9,1000
+6,sensitive,9,1000

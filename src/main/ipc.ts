@@ -97,7 +97,10 @@ export function registerIpcHandlers(ctx: AppContext): void {
     if (rootId === null) return []
 
     const limit = Math.min(Math.max(request.limit ?? 300, 1), 2000)
-    const found = ctx.db.listTags(rootId, request.query, limit)
+    // 集計範囲はフォルダ選択のみ。タグ条件で絞ると、選択中の条件と共起しない
+    // タグが一覧から消えて選べなくなるため、件数もフォルダ基準で安定させる。
+    const scope = { ...request.query, includeTags: [], excludeTags: [] }
+    const found = ctx.db.listTags(rootId, scope, limit)
 
     // 選択中タグが結果に含まれていなければ足しておく (解除できなくなるのを防ぐ)
     const present = new Set(found.map((tag) => tag.id))

@@ -81,7 +81,10 @@ const initialScan: ScanProgress = {
 
 export const useStore = create<State & Actions>((set, get) => {
   let requeryTimer: ReturnType<typeof setTimeout> | null = null
+  // 非同期の応答が追い越されたときに、古い結果で上書きしないための世代番号
   let queryToken = 0
+  let tagToken = 0
+  let treeToken = 0
   // StrictMode では effect が 2 回走るため、購読の二重登録を防ぐ
   let initStarted = false
   const inFlightImages = new Set<number>()
@@ -274,18 +277,23 @@ export const useStore = create<State & Actions>((set, get) => {
     },
 
     async refreshTree() {
-      set({ tree: await window.api.getTree() })
+      const token = ++treeToken
+      const tree = await window.api.getTree()
+      if (token !== treeToken) return
+      set({ tree })
     },
 
     async refreshTags() {
       if (!get().root) return
       const state = get()
+      const token = ++tagToken
       const tags = await window.api.listTags({
         query: currentQuery(),
         keepTagIds: [...state.includeTags, ...state.excludeTags],
         search: state.tagSearch,
         limit: 300
       })
+      if (token !== tagToken) return
       set({ tags })
     },
 

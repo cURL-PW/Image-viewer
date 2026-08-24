@@ -2,6 +2,7 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import sharp from 'sharp'
+import { DEFAULT_SETTINGS } from '../src/shared/types'
 
 export interface Fixture {
   /** 画像を置くルートフォルダ */
@@ -62,6 +63,26 @@ export async function createFixture(): Promise<Fixture> {
   }
 
   return { root, userData }
+}
+
+/** 既定モデル ID に対応するキャッシュ先。ここに置いておけばダウンロードは走らない。 */
+export function modelCacheDir(userData: string, modelId = DEFAULT_SETTINGS.modelId): string {
+  return path.join(userData, 'models', modelId.replace(/[^A-Za-z0-9._-]+/g, '_'))
+}
+
+/**
+ * 本物の WD14 モデルの代わりに、同じ入出力形状のダミーモデルを配置する。
+ * (e2e/fixtures/make-model.py で生成したもの)
+ */
+export async function installDummyModel(fixture: Fixture): Promise<void> {
+  const destination = modelCacheDir(fixture.userData)
+  await fs.mkdir(destination, { recursive: true })
+  const source = path.join(__dirname, 'fixtures')
+  await fs.copyFile(path.join(source, 'model.onnx'), path.join(destination, 'model.onnx'))
+  await fs.copyFile(
+    path.join(source, 'selected_tags.csv'),
+    path.join(destination, 'selected_tags.csv')
+  )
 }
 
 export async function removeFixture(fixture: Fixture): Promise<void> {
