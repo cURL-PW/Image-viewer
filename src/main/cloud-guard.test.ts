@@ -127,3 +127,69 @@ describe('NotDownloadedError', () => {
     expect(isNotDownloadedError('文字列')).toBe(false)
   })
 })
+
+describe('CloudGuard の正確な一覧 (ファイル属性ベース)', () => {
+  const index = (): Set<string> => new Set(['c:\\photos\\a.heic', 'c:\\photos\\b.heic'])
+
+  it('一覧にあるファイルだけを未ダウンロードと判定する', async () => {
+    const guard = new CloudGuard(OPTIONS)
+    guard.setPlaceholderIndex(index())
+
+    expect(await guard.isNotDownloaded('C:\\Photos\\A.HEIC')).toBe(true)
+    expect(await guard.isNotDownloaded('C:\\Photos\\local.jpg')).toBe(false)
+  })
+
+  it('一覧があるときは全体を止めず、1 枚ずつ弾く', async () => {
+    const guard = new CloudGuard(OPTIONS)
+    guard.setPlaceholderIndex(index())
+
+    // 未ダウンロードが居るのでクラウドモードには入る (UI で状況を伝えるため)
+    expect(guard.isCloudMode).toBe(true)
+    // ただしローカルの写真は従来どおり扱えるよう、自動読み込みは止めない
+    expect(guard.allowAutoRead()).toBe(true)
+    expect(guard.hasExactIndex).toBe(true)
+  })
+
+  it('落としたファイルは一覧から外れ、全部落ちればモードが解ける', async () => {
+    const guard = new CloudGuard(OPTIONS)
+    guard.setPlaceholderIndex(index())
+
+    guard.markDownloaded('C:\\Photos\\a.heic')
+    expect(await guard.isNotDownloaded('C:\\Photos\\a.heic')).toBe(false)
+    expect(guard.isCloudMode).toBe(true)
+
+    guard.markDownloaded('C:\\Photos\\b.heic')
+    expect(guard.isCloudMode).toBe(false)
+  })
+
+  it('一覧が空 (= 全部ローカル) ならクラウドモードに入らない', () => {
+    const guard = new CloudGuard(OPTIONS)
+    guard.setPlaceholderIndex(new Set())
+    expect(guard.isCloudMode).toBe(false)
+    expect(guard.allowAutoRead()).toBe(true)
+  })
+
+  it('一覧が作れなかった場合は遅さの遮断器へフォールバックする', async () => {
+    const guard = new CloudGuard(OPTIONS)
+    guard.setPlaceholderIndex(null)
+    expect(guard.hasExactIndex).toBe(false)
+
+    guard.recordRead(5000)
+    guard.recordRead(5000)
+    expect(guard.allowAutoRead()).toBe(false)
+  })
+
+  it('ルートを切り替えたら一覧も捨てる', () => {
+    const guard = new CloudGuard(OPTIONS)
+    guard.setPlaceholderIndex(index())
+    guard.reset()
+    expect(guard.hasExactIndex).toBe(false)
+  })
+
+  it('「常に読み込む」なら一覧があっても弾かない', async () => {
+    const guard = new CloudGuard(OPTIONS)
+    guard.setPlaceholderIndex(index())
+    guard.setAlwaysRead(true)
+    expect(await guard.isNotDownloaded('C:\\Photos\\a.heic')).toBe(false)
+  })
+})

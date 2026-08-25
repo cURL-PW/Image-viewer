@@ -18,6 +18,8 @@ const PROGRESS_INTERVAL = 250
 export const PLACEHOLDER_MESSAGE = '未ダウンロード (iCloud などのオンデマンドファイル)'
 /** 一括ダウンロードの同時実行数。回線と待ち時間に優しくする */
 const DOWNLOAD_CONCURRENCY = 2
+/** 未ダウンロードを飛ばす際、何件ごとに進捗を数え直すか */
+const SKIP_PROGRESS_INTERVAL = 200
 /** 同じ画像でワーカーが連続クラッシュした場合に諦めるまでの回数 */
 const MAX_JOB_RETRIES = 2
 
@@ -56,6 +58,8 @@ export class TaggerService {
 
   /** 実行中の一括ダウンロード。中断のためにフラグを持つ */
   private downloadJob: { cancelled: boolean } | null = null
+  /** 未ダウンロードを飛ばした回数。進捗の再計算を間引くために使う */
+  private skipped = 0
 
   constructor(
     private db: LibraryDb,
@@ -181,10 +185,12 @@ export class TaggerService {
         }
         this.broadcastProgress()
 
+        const filePath = path.resolve(rootPath, record.relPath)
         try {
           // force で門番を素通りし、実体を落としてサムネイルまで作る
-          await this.thumbs.get(record, path.resolve(rootPath, record.relPath), { force: true })
-          // 未ダウンロードとして飛ばしていたものをタグ付け対象へ戻す
+          await this.thumbs.get(record, filePath, { force: true })
+          // 落ちてきたので、未ダウンロード一覧から外してタグ付け対象へ戻す
+          this.guard.markDownloaded(filePath)
           this.db.clearScanError(id, PLACEHOLDER_MESSAGE)
         } catch (error) {
           console.warn('[tagger] ダウンロードに失敗', record.relPath, error)
@@ -256,6 +262,7 @@ export class TaggerService {
     if (this.queue.length === 0) {
       // 走査中ならこの後追加される可能性があるので idle にとどめる
       this.setState('idle')
+      this.skipped = 0
       this.refreshProgress()
       return
     }
@@ -290,7 +297,10 @@ export class TaggerService {
     if (await this.guard.isNotDownloaded(filePath)) {
       this.currentJob = null
       this.db.setScanError(record.id, PLACEHOLDER_MESSAGE)
-      this.refreshProgress()
+      // 未ダウンロードが数万件あることもあるので、進捗の再計算は間引く
+      // (COUNT を 1 件ごとに走らせると、飛ばすだけで時間がかかってしまう)
+      this.skipped++
+      if (this.skipped % SKIP_PROGRESS_INTERVAL === 0) this.refreshProgress()
       this.pump()
       return
     }

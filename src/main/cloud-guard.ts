@@ -6,6 +6,7 @@ import type {
   ReadKind,
   ReadSample
 } from '@shared/types'
+import { normalizePath } from './win-placeholders'
 
 /**
  * クラウド同期フォルダ (iCloud / OneDrive のオンデマンドファイル) を扱うための門番。
@@ -85,6 +86,11 @@ export class CloudGuard extends EventEmitter<CloudGuardEvents> {
   private alwaysRead = false
   private reads: ReadSample[] = []
   private placeholders: PlaceholderSample[] = []
+  /**
+   * ファイル属性から作った、未ダウンロードファイルの正確な一覧。
+   * これがあれば推測が要らないので、フォルダ全体を止めずに 1 枚ずつ弾ける。
+   */
+  private placeholderIndex: Set<string> | null = null
 
   constructor(private readonly options: CloudGuardOptions = DEFAULT_CLOUD_GUARD_OPTIONS) {
     super()
@@ -103,6 +109,8 @@ export class CloudGuard extends EventEmitter<CloudGuardEvents> {
     return {
       ...this.status,
       alwaysRead: this.alwaysRead,
+      exactIndex: this.placeholderIndex !== null,
+      indexSize: this.placeholderIndex?.size ?? 0,
       platform: process.platform,
       slowReadMs: this.options.slowReadMs,
       reads: [...this.reads],
@@ -110,9 +118,36 @@ export class CloudGuard extends EventEmitter<CloudGuardEvents> {
     }
   }
 
-  /** サムネイル生成やタグ付けなど、自動で走る読み込みを許可してよいか。 */
+  /** 未ダウンロードファイルの正確な一覧があるか。 */
+  get hasExactIndex(): boolean {
+    return this.placeholderIndex !== null
+  }
+
+  /** ダウンロード済みになったファイルを一覧から外す。 */
+  markDownloaded(filePath: string): void {
+    if (this.placeholderIndex === null) return
+    if (!this.placeholderIndex.delete(normalizePath(filePath))) return
+    // 全部落ちたならクラウドモードを解いてよい
+    if (this.placeholderIndex.size === 0) this.setCloudMode(false)
+  }
+
+  /** ファイル属性から作った一覧を差し込む。null で推測モードへ戻す。 */
+  setPlaceholderIndex(paths: Set<string> | null): void {
+    this.placeholderIndex = paths
+    if (paths && paths.size > 0) this.enterCloudMode('placeholder')
+    else this.emitChange()
+  }
+
+  /**
+   * サムネイル生成やタグ付けなど、自動で走る読み込みを許可してよいか。
+   *
+   * 正確な一覧があるときは、どのファイルが危険かを個別に判定できるので
+   * 全体を止める必要がない (ローカルにある写真はそのまま扱える)。
+   */
   allowAutoRead(): boolean {
-    return this.alwaysRead || !this.cloudMode
+    if (this.alwaysRead) return true
+    if (this.placeholderIndex !== null) return true
+    return !this.cloudMode
   }
 
   /** 設定の「未ダウンロードの写真も読み込む」。 */
@@ -135,6 +170,7 @@ export class CloudGuard extends EventEmitter<CloudGuardEvents> {
     this.consecutiveFast = 0
     this.reads = []
     this.placeholders = []
+    this.placeholderIndex = null
     if (changed) this.emitChange()
   }
 
@@ -144,6 +180,12 @@ export class CloudGuard extends EventEmitter<CloudGuardEvents> {
    */
   async isNotDownloaded(filePath: string): Promise<boolean> {
     if (this.alwaysRead) return false
+
+    // 属性から作った一覧があれば、それが答え。stat すら要らない。
+    if (this.placeholderIndex !== null) {
+      return this.placeholderIndex.has(normalizePath(filePath))
+    }
+
     if (process.platform !== 'win32') return false
     try {
       const stats = await fs.stat(filePath)

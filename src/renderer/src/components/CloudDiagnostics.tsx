@@ -49,6 +49,12 @@ export default function CloudDiagnosticsPanel(): React.JSX.Element {
           {diagnostics.alwaysRead || !diagnostics.cloudMode ? '許可' : '停止中'}
           {diagnostics.alwaysRead ? ' (常に読み込む設定)' : ''}
         </dd>
+        <dt>判定の方法</dt>
+        <dd>
+          {diagnostics.exactIndex
+            ? `ファイル属性 (未ダウンロード ${diagnostics.indexSize.toLocaleString()} 件)`
+            : '読み込み時間からの推定'}
+        </dd>
         <dt>遅いと判定する時間</dt>
         <dd>{diagnostics.slowReadMs} ms 超</dd>
         <dt>直近の最遅</dt>

@@ -111,6 +111,10 @@ export interface CloudDiagnostics {
   cloudMode: boolean
   reason: 'placeholder' | 'slow' | 'manual' | 'remembered' | null
   alwaysRead: boolean
+  /** ファイル属性から作った正確な一覧を使えているか */
+  exactIndex: boolean
+  /** その一覧に入っている未ダウンロードファイルの数 */
+  indexSize: number
   platform: string
   slowReadMs: number
   /** 直近の読み込み時間 (新しい順) */

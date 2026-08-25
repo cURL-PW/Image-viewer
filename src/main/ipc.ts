@@ -74,8 +74,10 @@ export function registerIpcHandlers(ctx: AppContext): void {
     if (!target) return { image: null, tags: [] }
 
     let image = target.record
-    // 解像度未取得ならこのタイミングで補完する
-    if (image.width === null || image.height === null) {
+    // 解像度の取得もファイルのデータを読むため、未ダウンロードなら触らない
+    // (ここを通すとクラウドから 1 枚落ちてしまう)
+    const notDownloaded = await ctx.guard.isNotDownloaded(target.fullPath)
+    if (!notDownloaded && (image.width === null || image.height === null)) {
       const dimensions = await ctx.thumbs.dimensions(target.fullPath)
       if (dimensions) {
         ctx.db.setDimensions(id, dimensions.width, dimensions.height)
