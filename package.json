@@ -14,7 +14,8 @@
     "test": "vitest run",
     "package": "npm run build && electron-builder --dir",
     "dist": "npm run build && electron-builder",
-    "e2e": "npm run build && playwright test"
+    "e2e": "npm run build && playwright test",
+    "postinstall": "node scripts/install-electron-binary.mjs"
   },
   "dependencies": {
     "chokidar": "^5.0.0",

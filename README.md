@@ -15,14 +15,29 @@
 
 ## 動作環境
 
-- Node.js 20 以降 (開発時)
+- Node.js 22.12 以降 (開発時。Electron 43 の要求に合わせています)
 - Windows / macOS / Linux
-- タグ付けの GPU 実行 (任意)
-  - Windows: CUDA 12 + cuDNN、または DirectML
-  - Linux: CUDA 12 + cuDNN
-  - macOS: 現状 CPU 実行 (CoreML 対応は将来)
 
-GPU が使えない場合は自動的に CPU にフォールバックするため、追加のセットアップなしで動作します。
+タグ付けの実行プロバイダは CUDA → DirectML → CPU の順に試し、使えるものへ自動でフォールバックします。
+GPU が無くても追加のセットアップなしで動作します。プラットフォームごとの事情は次のとおりです。
+
+| | 既定で使える GPU 実行 | 追加ダウンロード |
+| --- | --- | --- |
+| Windows (x64) | **DirectML** (DirectX 12 対応 GPU なら設定不要) | なし |
+| Linux (x64) | CUDA (CUDA 12 + cuDNN が必要) | あり (`npm install` 時に自動、サイズ大) |
+| macOS | — (CPU 実行。CoreML 対応は将来) | なし |
+
+Windows で CUDA を使いたい場合は、明示的に指定してインストールします (CUDA 12 + cuDNN が別途必要)。
+
+```bash
+npm install --onnxruntime-node-install=cuda12
+```
+
+逆に Linux で CUDA バイナリのダウンロードを省略したい場合は次のようにします。
+
+```bash
+npm install --onnxruntime-node-install=skip
+```
 
 ## セットアップ
 
@@ -31,10 +46,13 @@ npm install
 npm run dev
 ```
 
-GPU 用バイナリのダウンロードを省略したい場合は、環境変数を付けてインストールします。
+`npm install` の postinstall で Electron 本体 (実行バイナリ) を取得します。Electron 38 以降、
+これは npm install に付随しなくなったため、本リポジトリでは
+`scripts/install-electron-binary.mjs` から明示的に実行しています。
+`--ignore-scripts` を付けてインストールした場合は、次を手動で実行してください。
 
 ```bash
-ONNXRUNTIME_NODE_INSTALL_CUDA=skip npm install
+npx install-electron
 ```
 
 ## 使い方
@@ -114,6 +132,35 @@ src/
 - **推論は utilityProcess で実行** — onnxruntime と sharp の重い処理をメインプロセスから切り離し、UI の応答性を保ちます
 - **画像は ID でのみ参照** — renderer にはファイルパスを渡さず、`app-image://` プロトコル側でルート配下かを検証してから配信します
 - **並び順は自然順** — `p2.jpg` が `p10.jpg` より前に来るよう、DB に自然順ソート用のキーを持たせています
+
+## トラブルシューティング
+
+### `Error: Electron uninstall` で起動しない
+
+Electron 本体 (実行バイナリ) が入っていません。`node_modules/electron/path.txt` が無いと
+electron-vite はこのエラーを出します。次のコマンドで取得できます。
+
+```bash
+npx install-electron
+```
+
+`npm install --ignore-scripts` を使った場合や、ダウンロードが途中で失敗した場合に起こります。
+社内プロキシ配下では `ELECTRON_GET_USE_PROXY=1` と `GLOBAL_AGENT_HTTPS_PROXY` を設定してください。
+キャッシュが壊れている場合は下記を削除してからやり直します。
+
+| OS | キャッシュの場所 |
+| --- | --- |
+| Windows | `%LOCALAPPDATA%\electron\Cache` |
+| macOS | `~/Library/Caches/electron` |
+| Linux | `~/.cache/electron` |
+
+### Linux で sharp の互換性警告が出る
+
+`[SharpElectronLinux] Warning: Binaries provided by Electron for use on Linux may be
+incompatible with sharp` は、Electron が同梱する共有ライブラリと sharp の組み合わせに対する
+警告です。動作に問題が出なければ無視して構いません。実際に読み込みへ失敗する場合は
+[sharp のインストール手引き](https://sharp.pixelplumbing.com/install#electron-and-linux)
+を参照してください。
 
 ## ライセンス
 
