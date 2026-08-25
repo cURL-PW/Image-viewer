@@ -15,19 +15,6 @@ export function isSupportedImage(filePath: string): boolean {
   return EXTENSIONS.has(path.extname(filePath).toLowerCase())
 }
 
-/**
- * iCloud や OneDrive のオンデマンドファイル (実体がクラウドにあり、読むと
- * ダウンロードが始まるプレースホルダ) かどうか。
- *
- * Windows では libuv が st_blocks を AllocationSize から埋めるため、
- * 「論理サイズはあるが割り当て 0」で未ダウンロードを判別できる。
- * 他の OS ではスパースファイルと区別が付かないので常に false を返す。
- */
-export function isPlaceholderFile(stats: { size: number; blocks: number }, platform = process.platform): boolean {
-  if (platform !== 'win32') return false
-  return stats.size > 0 && stats.blocks === 0
-}
-
 /** OS 依存の区切り文字を DB 上の posix 表記へ正規化する。 */
 export function toRelPath(rootPath: string, fullPath: string): string {
   return path.relative(rootPath, fullPath).split(path.sep).join('/')
@@ -45,13 +32,36 @@ export interface WalkedFile extends ImageUpsert {
 }
 
 /**
+ * 走査中に `fs.stat` を許可するかを決める門番。
+ *
+ * Windows の libuv は `fs.stat` の実装でファイルを CreateFileW で開くため、
+ * iCloud のように「開いた時点で実体を取りに行く」プレースホルダだと、
+ * **走査するだけでライブラリ全体がダウンロードされてしまう**。
+ * ここで所要時間を測り、遅い状態が続いたら stat をやめる。
+ */
+export interface StatGate {
+  allow(): boolean
+  record(durationMs: number): void
+}
+
+export interface WalkOptions {
+  batchSize?: number
+  gate?: StatGate
+}
+
+/**
  * ルート配下を再帰的に走査し、対応形式の画像を batch 単位で返す。
  * シンボリックリンクのディレクトリは循環を避けるため辿らない。
+ *
+ * 門番が stat を止めた場合は mtime / size を 0 として登録する。
+ * 実際の値は、その画像を本当に読むとき (サムネイル生成やタグ付け) に埋まる。
  */
 export async function* walkImages(
   rootPath: string,
-  batchSize = WALK_BATCH
+  options: WalkOptions = {}
 ): AsyncGenerator<WalkedFile[]> {
+  const batchSize = options.batchSize ?? WALK_BATCH
+  const gate = options.gate
   const stack: string[] = [rootPath]
   let batch: WalkedFile[] = []
 
@@ -74,20 +84,29 @@ export async function* walkImages(
       }
       if (!entry.isFile() || !isSupportedImage(entry.name)) continue
 
-      try {
-        const stats = await fs.stat(fullPath)
-        const relPath = toRelPath(rootPath, fullPath)
-        const { dirPath, fileName } = splitRelPath(relPath)
-        batch.push({
-          fullPath,
-          relPath,
-          dirPath,
-          fileName,
-          mtime: Math.floor(stats.mtimeMs),
-          size: stats.size
-        })
-      } catch {
-        continue
+      const relPath = toRelPath(rootPath, fullPath)
+      const { dirPath, fileName } = splitRelPath(relPath)
+
+      // readdir はファイルを開かないので安全だが、stat は Windows で実体を取りに行く。
+      // 止められている間は寸法不明のまま登録し、必要になった時点で埋める。
+      if (gate && !gate.allow()) {
+        batch.push({ fullPath, relPath, dirPath, fileName, mtime: 0, size: 0 })
+      } else {
+        try {
+          const startedAt = Date.now()
+          const stats = await fs.stat(fullPath)
+          gate?.record(Date.now() - startedAt)
+          batch.push({
+            fullPath,
+            relPath,
+            dirPath,
+            fileName,
+            mtime: Math.floor(stats.mtimeMs),
+            size: stats.size
+          })
+        } catch {
+          continue
+        }
       }
 
       if (batch.length >= batchSize) {
@@ -121,7 +140,11 @@ export class Library extends EventEmitter<LibraryEvents> {
   private pendingRemoveDir = new Set<string>()
   private flushTimer: NodeJS.Timeout | null = null
 
-  constructor(private db: LibraryDb) {
+  constructor(
+    private db: LibraryDb,
+    /** 走査中の stat を止められるようにする (クラウド同期フォルダ対策) */
+    private gate?: StatGate
+  ) {
     super()
   }
 
@@ -198,7 +221,7 @@ export class Library extends EventEmitter<LibraryEvents> {
     let found = 0
 
     try {
-      for await (const batch of walkImages(rootPath)) {
+      for await (const batch of walkImages(rootPath, { gate: this.gate })) {
         if (generation !== this.generation) return // ルートが切り替わった
         for (const file of batch) seen.add(file.relPath)
         const { added, updated } = this.db.upsertMany(rootId, batch)
@@ -294,11 +317,19 @@ export class Library extends EventEmitter<LibraryEvents> {
 
     const files: ImageUpsert[] = []
     for (const fullPath of upserts) {
+      const relPath = toRelPath(rootPath, fullPath)
+      if (relPath.startsWith('..')) continue
+      const { dirPath, fileName } = splitRelPath(relPath)
+
+      // 走査と同じ理由で、止められている間は stat しない
+      if (this.gate && !this.gate.allow()) {
+        files.push({ relPath, dirPath, fileName, mtime: 0, size: 0 })
+        continue
+      }
       try {
+        const startedAt = Date.now()
         const stats = await fs.stat(fullPath)
-        const relPath = toRelPath(rootPath, fullPath)
-        if (relPath.startsWith('..')) continue
-        const { dirPath, fileName } = splitRelPath(relPath)
+        this.gate?.record(Date.now() - startedAt)
         files.push({
           relPath,
           dirPath,

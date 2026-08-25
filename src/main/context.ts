@@ -1,4 +1,5 @@
 import { BrowserWindow } from 'electron'
+import { LAST_ROOT_KEY } from './settings'
 import type { LibraryDb } from './db'
 import type { Library } from './library'
 import type { ResolvedImage } from './protocol'
@@ -17,6 +18,28 @@ export interface AppContext {
   guard: CloudGuard
   tagger: TaggerService
   resolve: (id: number) => ResolvedImage | null
+}
+
+/** クラウド判定をルートごとに覚えておくための設定キー。 */
+export function cloudModeKey(rootPath: string): string {
+  return `cloud_mode:${rootPath}`
+}
+
+/**
+ * ルートフォルダを開く。
+ *
+ * 走査は `setRoot` の中で即座に始まり、その走査自体が `fs.stat` でファイルを開く
+ * (= クラウドではダウンロードが走る) ため、**門番の状態を決めてから**開くこと。
+ * 以前クラウドと判定したフォルダは、また数枚落として確かめ直さずに済むよう記憶を復元する。
+ */
+export async function openRoot(ctx: AppContext, rootPath: string): Promise<number> {
+  const remembered = ctx.db.getSetting(cloudModeKey(rootPath)) === '1'
+  ctx.guard.reset(remembered)
+
+  const rootId = await ctx.library.setRoot(rootPath)
+  ctx.db.setSetting(LAST_ROOT_KEY, String(rootId))
+  ctx.tagger.notifyLibraryChanged()
+  return rootId
 }
 
 /** 開いている全ウィンドウへイベントを送る。 */

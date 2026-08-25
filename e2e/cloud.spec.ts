@@ -109,3 +109,25 @@ test('まとめてダウンロードすると雲タイルが消え、タグ付�
   await expect(window.locator('.tag').first()).toBeVisible()
   await window.screenshot({ path: `${SHOTS}/09-after-download.png` })
 })
+
+test('設定画面の診断で、判定の内訳と読み込み時間を確認できる', async () => {
+  await window.locator('.toolbar .button--icon', { hasText: '⚙' }).click()
+  await expect(window.locator('.modal__panel')).toBeVisible()
+
+  const diagnostics = window.locator('.diagnostics')
+  await diagnostics.scrollIntoViewIfNeeded()
+
+  // 判定のしきい値と現在の状態が読める (この spec では 0ms に下げて起動している)
+  await expect(diagnostics).toContainText('クラウドモード')
+  await expect(diagnostics).toContainText('0 ms 超')
+
+  // 読み込み時間が記録されている。走査の stat も計測対象で、
+  // Windows ではここが最初の発火点になる
+  const samples = diagnostics.locator('.diagnostics__list li')
+  await expect(samples.first()).toBeVisible()
+  await expect(samples.first()).toContainText('ms')
+  await window.screenshot({ path: `${SHOTS}/10-diagnostics.png` })
+
+  await window.locator('.modal__footer .button--primary').click()
+  await expect(window.locator('.modal')).toHaveCount(0)
+})

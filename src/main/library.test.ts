@@ -1,6 +1,6 @@
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { isPlaceholderFile, isSupportedImage, splitRelPath, toRelPath } from './library'
+import { isSupportedImage, splitRelPath, toRelPath, walkImages } from './library'
 
 describe('isSupportedImage', () => {
   it('対応拡張子を大文字小文字を問わず受け入れる', () => {
@@ -50,22 +50,80 @@ describe('splitRelPath', () => {
   })
 })
 
-describe('isPlaceholderFile', () => {
-  // iCloud / OneDrive の未ダウンロードファイルは、論理サイズはあるが割り当てが 0 になる
-  const placeholder = { size: 2_400_000, blocks: 0 }
-  const local = { size: 2_400_000, blocks: 4688 }
+describe('walkImages の stat 門番', () => {
+  /**
+   * Windows の libuv は fs.stat でファイルを開くため、クラウドのプレースホルダだと
+   * 走査するだけでライブラリ全体がダウンロードされてしまう。
+   * 門番が止めているあいだは stat せずに登録できることを確認する。
+   */
+  async function fixture(): Promise<string> {
+    const os = await import('node:os')
+    const fsp = await import('node:fs/promises')
+    const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'walk-gate-'))
+    await fsp.mkdir(path.join(dir, 'sub'), { recursive: true })
+    for (const name of ['a.png', 'b.png', 'sub/c.png']) {
+      await fsp.writeFile(path.join(dir, ...name.split('/')), Buffer.alloc(16, 1))
+    }
+    return dir
+  }
 
-  it('Windows では未ダウンロードのプレースホルダを検出する', () => {
-    expect(isPlaceholderFile(placeholder, 'win32')).toBe(true)
-    expect(isPlaceholderFile(local, 'win32')).toBe(false)
+  async function collect(root: string, gate?: Parameters<typeof walkImages>[1]) {
+    const files = []
+    for await (const batch of walkImages(root, gate)) files.push(...batch)
+    return files.sort((a, b) => a.relPath.localeCompare(b.relPath))
+  }
+
+  it('門番が無ければ従来どおり stat して mtime と size を埋める', async () => {
+    const root = await fixture()
+    const files = await collect(root)
+    expect(files.map((file) => file.relPath)).toEqual(['a.png', 'b.png', 'sub/c.png'])
+    for (const file of files) {
+      expect(file.size).toBe(16)
+      expect(file.mtime).toBeGreaterThan(0)
+    }
   })
 
-  it('空ファイルはプレースホルダ扱いしない', () => {
-    expect(isPlaceholderFile({ size: 0, blocks: 0 }, 'win32')).toBe(false)
+  it('門番が止めているあいだは stat せず、寸法不明として登録する', async () => {
+    const root = await fixture()
+    let statCalls = 0
+    const files = await collect(root, {
+      gate: {
+        allow: () => false,
+        record: () => {
+          statCalls++
+        }
+      }
+    })
+
+    // ファイル自体は見つかる (readdir はファイルを開かないので安全)
+    expect(files.map((file) => file.relPath)).toEqual(['a.png', 'b.png', 'sub/c.png'])
+    // stat は 1 回も呼ばれない
+    expect(statCalls).toBe(0)
+    for (const file of files) {
+      expect(file.size).toBe(0)
+      expect(file.mtime).toBe(0)
+    }
   })
 
-  it('Windows 以外ではスパースファイルと区別できないので常に false', () => {
-    expect(isPlaceholderFile(placeholder, 'linux')).toBe(false)
-    expect(isPlaceholderFile(placeholder, 'darwin')).toBe(false)
+  it('遅さを検知した時点で以降の stat をやめる', async () => {
+    const root = await fixture()
+    const durations: number[] = []
+    let allowed = true
+
+    const files = await collect(root, {
+      gate: {
+        allow: () => allowed,
+        record: (ms) => {
+          durations.push(ms)
+          // 1 件目を「遅い」とみなして打ち切る、という遮断器の動きを模す
+          allowed = false
+        }
+      }
+    })
+
+    expect(files).toHaveLength(3)
+    // stat したのは最初の 1 件だけ
+    expect(durations).toHaveLength(1)
+    expect(files.filter((file) => file.size === 0)).toHaveLength(2)
   })
 })

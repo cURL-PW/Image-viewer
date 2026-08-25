@@ -10,10 +10,10 @@ import {
   type RootInfo,
   type ScanCommand,
   type ScanProgress,
-  type TagInfo
+  type TagInfo,
+  type CloudDiagnostics
 } from '@shared/types'
-import type { AppContext } from './context'
-import { LAST_ROOT_KEY } from './settings'
+import { openRoot, type AppContext } from './context'
 
 export interface ImageInfoResult {
   image: ImageRecord | null
@@ -43,11 +43,7 @@ export function registerIpcHandlers(ctx: AppContext): void {
       : await dialog.showOpenDialog({ properties: ['openDirectory'] })
     if (result.canceled || result.filePaths.length === 0) return currentRoot(ctx)
 
-    const rootId = await ctx.library.setRoot(result.filePaths[0])
-    ctx.db.setSetting(LAST_ROOT_KEY, String(rootId))
-    // フォルダが変われば、クラウドかどうかの判定もやり直す
-    ctx.guard.reset()
-    ctx.tagger.notifyLibraryChanged()
+    await openRoot(ctx, result.filePaths[0])
     return currentRoot(ctx)
   })
 
@@ -128,6 +124,8 @@ export function registerIpcHandlers(ctx: AppContext): void {
   )
 
   ipcMain.handle(IPC.cancelDownload, (): void => ctx.tagger.cancelDownload())
+
+  ipcMain.handle(IPC.getDiagnostics, (): CloudDiagnostics => ctx.guard.diagnostics)
 
   ipcMain.handle(IPC.getSettings, (): AppSettings => ctx.settings.get())
 

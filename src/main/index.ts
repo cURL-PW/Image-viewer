@@ -2,7 +2,7 @@ import path from 'node:path'
 import fs from 'node:fs'
 import { BrowserWindow, app, session, shell } from 'electron'
 import { IMAGE_PROTOCOL, IPC, THUMB_PROTOCOL } from '@shared/types'
-import { broadcast, type AppContext } from './context'
+import { broadcast, cloudModeKey, openRoot, type AppContext } from './context'
 import { LibraryDb } from './db'
 import { registerIpcHandlers } from './ipc'
 import { Library } from './library'
@@ -60,7 +60,7 @@ function createContext(): AppContext {
 
   const db = new LibraryDb(path.join(userData, 'library.db'))
   const settings = new SettingsStore(db)
-  const library = new Library(db)
+
   // クラウド同期フォルダで勝手にダウンロードが走らないようにする門番。
   // しきい値は E2E から下げられるようにしておく。
   const slowReadMs = Number(process.env.IMAGE_VIEWER_SLOW_READ_MS)
@@ -69,6 +69,13 @@ function createContext(): AppContext {
     slowReadMs: Number.isFinite(slowReadMs) ? slowReadMs : DEFAULT_CLOUD_GUARD_OPTIONS.slowReadMs
   })
   guard.setAlwaysRead(settings.get().alwaysReadCloudFiles)
+
+  // 走査の fs.stat も門番を通す。Windows ではこれがファイルを開くため、
+  // 通さないと「走査しただけでライブラリ全体がダウンロードされる」ことになる。
+  const library = new Library(db, {
+    allow: () => guard.allowAutoRead(),
+    record: (ms) => guard.recordRead(ms, 'stat')
+  })
 
   const thumbs = new DerivedImageCache({
     cacheDir: path.join(userData, 'thumbnails'),
@@ -94,6 +101,14 @@ function createContext(): AppContext {
   })
   library.on('indexProgress', (progress) => {
     broadcast(IPC.eventIndexProgress, progress)
+  })
+
+  // 一度クラウドと判定したフォルダは覚えておき、次に開くときは
+  // また数枚ダウンロードして確かめ直さずに済むようにする
+  guard.on('change', (status) => {
+    const rootPath = library.currentRootPath
+    if (!rootPath || status.reason === 'remembered') return
+    db.setSetting(cloudModeKey(rootPath), status.cloudMode ? '1' : '')
   })
 
   return { db, library, thumbs, display, settings, guard, tagger, resolve }
@@ -191,25 +206,13 @@ if (!app.requestSingleInstanceLock()) {
 
     // コマンドラインでの指定を優先し、なければ前回開いていたフォルダを復帰する
     const cliRoot = startupRoot(process.argv, process.env)
-    if (cliRoot !== null) {
-      const rootId = await context.library.setRoot(cliRoot)
-      context.db.setSetting(LAST_ROOT_KEY, String(rootId))
-      context.guard.reset()
-      broadcast(IPC.eventRootChanged, { id: rootId, path: cliRoot, indexed: false })
-      context.tagger.notifyLibraryChanged()
-    } else {
-      const lastRoot = context.db.getSetting(LAST_ROOT_KEY)
-      if (lastRoot !== null) {
-        const restored = await context.library.resumeRoot(Number(lastRoot))
-        if (restored) {
-          broadcast(IPC.eventRootChanged, {
-            id: Number(lastRoot),
-            path: context.library.currentRootPath as string,
-            indexed: false
-          })
-          context.tagger.notifyLibraryChanged()
-        }
-      }
+    const lastRootId = context.db.getSetting(LAST_ROOT_KEY)
+    const startPath =
+      cliRoot ?? (lastRootId !== null ? context.db.getRootPath(Number(lastRootId)) : null)
+
+    if (startPath !== null && fs.existsSync(startPath)) {
+      const rootId = await openRoot(context, startPath)
+      broadcast(IPC.eventRootChanged, { id: rootId, path: startPath, indexed: false })
     }
 
     app.on('activate', () => {

@@ -1,5 +1,6 @@
 import type {
   AppSettings,
+  CloudDiagnostics,
   FolderNode,
   ImageQuery,
   ImageRecord,
@@ -38,6 +39,8 @@ export interface RendererApi {
   /** 指定フォルダ配下をまとめてダウンロードし、タグ付けの対象へ戻す */
   downloadFolder(request: { dir: string; recursive: boolean }): Promise<void>
   cancelDownload(): Promise<void>
+  /** クラウド判定の診断情報 (設定画面で表示する) */
+  getDiagnostics(): Promise<CloudDiagnostics>
   getScanProgress(): Promise<ScanProgress>
   getSettings(): Promise<AppSettings>
   setSettings(patch: Partial<AppSettings>): Promise<AppSettings>

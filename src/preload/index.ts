@@ -23,6 +23,7 @@ const api: RendererApi = {
   scanControl: (command) => ipcRenderer.invoke(IPC.scanControl, command),
   downloadFolder: (request) => ipcRenderer.invoke(IPC.downloadFolder, request),
   cancelDownload: () => ipcRenderer.invoke(IPC.cancelDownload),
+  getDiagnostics: () => ipcRenderer.invoke(IPC.getDiagnostics),
   getScanProgress: () => ipcRenderer.invoke(IPC.getScanProgress),
   getSettings: () => ipcRenderer.invoke(IPC.getSettings),
   setSettings: (patch) => ipcRenderer.invoke(IPC.setSettings, patch),

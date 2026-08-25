@@ -91,6 +91,34 @@ export interface RootInfo {
   indexed: boolean
 }
 
+/** 読み込み時間の記録。どの経路が遅いのかを診断で見せるために種別を持つ */
+export type ReadKind = 'stat' | 'thumbnail' | 'display'
+
+export interface ReadSample {
+  kind: ReadKind
+  ms: number
+}
+
+export interface PlaceholderSample {
+  name: string
+  size: number
+  blocks: number
+  verdict: boolean
+}
+
+/** 設定画面に出す診断情報。実機で何が起きているかを手作業なしで確認するためのもの */
+export interface CloudDiagnostics {
+  cloudMode: boolean
+  reason: 'placeholder' | 'slow' | 'manual' | 'remembered' | null
+  alwaysRead: boolean
+  platform: string
+  slowReadMs: number
+  /** 直近の読み込み時間 (新しい順) */
+  reads: ReadSample[]
+  /** 直近のプレースホルダ判定 (新しい順) */
+  placeholders: PlaceholderSample[]
+}
+
 export interface DownloadProgress {
   done: number
   total: number
@@ -113,7 +141,7 @@ export interface ScanProgress {
   /** クラウド同期フォルダとみなして自動読み込みを止めているか */
   cloudMode: boolean
   /** なぜクラウドモードに入ったか */
-  cloudReason: 'placeholder' | 'slow' | 'manual' | null
+  cloudReason: 'placeholder' | 'slow' | 'manual' | 'remembered' | null
   /** 未ダウンロードとして飛ばした枚数 */
   notDownloaded: number
   /** 一括ダウンロードの進捗。実行していないときは null */
@@ -186,6 +214,7 @@ export const IPC = {
   getScanProgress: 'scan:getProgress',
   downloadFolder: 'library:downloadFolder',
   cancelDownload: 'library:cancelDownload',
+  getDiagnostics: 'cloud:getDiagnostics',
   getSettings: 'settings:get',
   setSettings: 'settings:set',
   // main → renderer

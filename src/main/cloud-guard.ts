@@ -1,5 +1,11 @@
 import fs from 'node:fs/promises'
 import { EventEmitter } from 'node:events'
+import type {
+  CloudDiagnostics,
+  PlaceholderSample,
+  ReadKind,
+  ReadSample
+} from '@shared/types'
 
 /**
  * クラウド同期フォルダ (iCloud / OneDrive のオンデマンドファイル) を扱うための門番。
@@ -41,12 +47,15 @@ export function isLikelyPlaceholder(
   return stats.blocks * 512 < stats.size / 2
 }
 
-export type CloudModeReason = 'placeholder' | 'slow' | 'manual' | null
+export type CloudModeReason = 'placeholder' | 'slow' | 'manual' | 'remembered' | null
 
 export interface CloudStatus {
   cloudMode: boolean
   reason: CloudModeReason
 }
+
+/** 診断で保持する履歴の件数 */
+const SAMPLE_LIMIT = 20
 
 export interface CloudGuardOptions {
   /** これを超える読み込みを「遅い」とみなす (ms) */
@@ -74,6 +83,8 @@ export class CloudGuard extends EventEmitter<CloudGuardEvents> {
   private consecutiveFast = 0
   /** ユーザーが「常に読み込む」を選んだ場合は門番を無効化する */
   private alwaysRead = false
+  private reads: ReadSample[] = []
+  private placeholders: PlaceholderSample[] = []
 
   constructor(private readonly options: CloudGuardOptions = DEFAULT_CLOUD_GUARD_OPTIONS) {
     super()
@@ -85,6 +96,18 @@ export class CloudGuard extends EventEmitter<CloudGuardEvents> {
 
   get isCloudMode(): boolean {
     return this.cloudMode
+  }
+
+  /** 設定画面へ出す診断情報。 */
+  get diagnostics(): CloudDiagnostics {
+    return {
+      ...this.status,
+      alwaysRead: this.alwaysRead,
+      platform: process.platform,
+      slowReadMs: this.options.slowReadMs,
+      reads: [...this.reads],
+      placeholders: [...this.placeholders]
+    }
   }
 
   /** サムネイル生成やタグ付けなど、自動で走る読み込みを許可してよいか。 */
@@ -99,13 +122,19 @@ export class CloudGuard extends EventEmitter<CloudGuardEvents> {
     this.emitChange()
   }
 
-  /** ルートを切り替えたら判定をやり直す。 */
-  reset(): void {
-    const changed = this.cloudMode
-    this.cloudMode = false
-    this.reason = null
+  /**
+   * ルートを切り替えたら判定をやり直す。
+   * 以前クラウドと判定したフォルダは、再び数枚ダウンロードして確かめ直さずに済むよう
+   * `remembered` を渡して最初からクラウドモードで始められる。
+   */
+  reset(remembered = false): void {
+    const changed = this.cloudMode !== remembered
+    this.cloudMode = remembered
+    this.reason = remembered ? 'remembered' : null
     this.consecutiveSlow = 0
     this.consecutiveFast = 0
+    this.reads = []
+    this.placeholders = []
     if (changed) this.emitChange()
   }
 
@@ -118,7 +147,14 @@ export class CloudGuard extends EventEmitter<CloudGuardEvents> {
     if (process.platform !== 'win32') return false
     try {
       const stats = await fs.stat(filePath)
-      if (!isLikelyPlaceholder(stats)) return false
+      const verdict = isLikelyPlaceholder(stats)
+      this.record(this.placeholders, {
+        name: filePath.split(/[\\/]/).pop() ?? filePath,
+        size: stats.size,
+        blocks: stats.blocks,
+        verdict
+      })
+      if (!verdict) return false
       // 1 件でも確実に見つかれば、この場でクラウドモードへ入れてよい
       this.enterCloudMode('placeholder')
       return true
@@ -131,7 +167,9 @@ export class CloudGuard extends EventEmitter<CloudGuardEvents> {
    * 読み込みにかかった時間を記録する。
    * 遅さが続けばクラウドモードへ入り、速さが続けば解除する。
    */
-  recordRead(durationMs: number): void {
+  recordRead(durationMs: number, kind: ReadKind = 'thumbnail'): void {
+    this.record(this.reads, { kind, ms: Math.round(durationMs) })
+
     if (durationMs > this.options.slowReadMs) {
       this.consecutiveFast = 0
       this.consecutiveSlow++
@@ -166,6 +204,12 @@ export class CloudGuard extends EventEmitter<CloudGuardEvents> {
     this.reason = null
     this.consecutiveSlow = 0
     this.emitChange()
+  }
+
+  /** 履歴を新しい順に一定件数だけ保持する。 */
+  private record<T>(buffer: T[], sample: T): void {
+    buffer.unshift(sample)
+    if (buffer.length > SAMPLE_LIMIT) buffer.length = SAMPLE_LIMIT
   }
 
   private enterCloudMode(reason: CloudModeReason): void {
