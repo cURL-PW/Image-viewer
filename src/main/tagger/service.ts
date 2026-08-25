@@ -1,12 +1,12 @@
-import fs from 'node:fs/promises'
 import path from 'node:path'
 import { app, utilityProcess, type UtilityProcess } from 'electron'
 import { IPC, type ImageRecord, type ScanCommand, type ScanProgress } from '@shared/types'
 import { broadcast } from '../context'
+import type { CloudGuard } from '../cloud-guard'
 import type { LibraryDb } from '../db'
+import type { DerivedImageCache } from '../image-cache'
 import type { Library } from '../library'
 import type { SettingsStore } from '../settings'
-import { isPlaceholderFile } from '../library'
 import { ensureModel } from './model'
 import { providerCandidates, type WorkerRequest, type WorkerResponse } from './protocol'
 
@@ -15,7 +15,9 @@ const QUEUE_CHUNK = 64
 /** 進捗ブロードキャストの最小間隔 (ms) */
 const PROGRESS_INTERVAL = 250
 /** 未ダウンロードのクラウドファイルに付ける印 */
-const PLACEHOLDER_MESSAGE = '未ダウンロード (iCloud などのオンデマンドファイル)'
+export const PLACEHOLDER_MESSAGE = '未ダウンロード (iCloud などのオンデマンドファイル)'
+/** 一括ダウンロードの同時実行数。回線と待ち時間に優しくする */
+const DOWNLOAD_CONCURRENCY = 2
 /** 同じ画像でワーカーが連続クラッシュした場合に諦めるまでの回数 */
 const MAX_JOB_RETRIES = 2
 
@@ -45,15 +47,30 @@ export class TaggerService {
     provider: null,
     state: 'idle',
     modelProgress: null,
-    message: null
+    message: null,
+    cloudMode: false,
+    cloudReason: null,
+    notDownloaded: 0,
+    download: null
   }
+
+  /** 実行中の一括ダウンロード。中断のためにフラグを持つ */
+  private downloadJob: { cancelled: boolean } | null = null
 
   constructor(
     private db: LibraryDb,
     private library: Library,
     private settings: SettingsStore,
+    private guard: CloudGuard,
+    private thumbs: DerivedImageCache,
     private modelCacheDir = path.join(app.getPath('userData'), 'models')
-  ) {}
+  ) {
+    // クラウドモードの出入りを進捗へ反映し、自動タグ付けの可否を切り替える
+    this.guard.on('change', () => {
+      this.refreshProgress()
+      this.pump()
+    })
+  }
 
   getProgress(): ScanProgress {
     return this.progress
@@ -122,14 +139,77 @@ export class TaggerService {
     await this.disposeWorker()
   }
 
-  /** 実体がローカルに無いファイルか (Windows のクラウドプレースホルダ)。 */
-  private async isNotDownloaded(filePath: string): Promise<boolean> {
-    if (process.platform !== 'win32') return false
-    try {
-      return isPlaceholderFile(await fs.stat(filePath))
-    } catch {
-      return false
+  /**
+   * 指定フォルダ配下を順にダウンロードし、タグ付けの対象へ戻す。
+   *
+   * サムネイル生成を force で走らせることで実体を落とし、あわせて
+   * サムネイルも作ってしまう。クラウド側に優しくするため少数並列で行う。
+   */
+  async downloadFolder(dir: string, recursive: boolean): Promise<void> {
+    const rootId = this.library.currentRootId
+    const rootPath = this.library.currentRootPath
+    if (rootId === null || rootPath === null || this.downloadJob) return
+
+    const ids = this.db.queryImageIds(rootId, {
+      dir,
+      recursive,
+      includeTags: [],
+      excludeTags: [],
+      tagMode: 'and',
+      sortKey: 'path',
+      sortOrder: 'asc'
+    })
+
+    const job = { cancelled: false }
+    this.downloadJob = job
+    this.progress = { ...this.progress, download: { done: 0, total: ids.length, current: null } }
+    this.broadcastProgress(true)
+
+    let done = 0
+    const next = async (): Promise<void> => {
+      while (!job.cancelled) {
+        const id = ids[done]
+        if (id === undefined) return
+        done++
+
+        const record = this.db.getImage(id)
+        if (!record) continue
+
+        this.progress = {
+          ...this.progress,
+          download: { done, total: ids.length, current: record.fileName }
+        }
+        this.broadcastProgress()
+
+        try {
+          // force で門番を素通りし、実体を落としてサムネイルまで作る
+          await this.thumbs.get(record, path.resolve(rootPath, record.relPath), { force: true })
+          // 未ダウンロードとして飛ばしていたものをタグ付け対象へ戻す
+          this.db.clearScanError(id, PLACEHOLDER_MESSAGE)
+        } catch (error) {
+          console.warn('[tagger] ダウンロードに失敗', record.relPath, error)
+        }
+      }
     }
+
+    try {
+      await Promise.all(Array.from({ length: DOWNLOAD_CONCURRENCY }, next))
+    } finally {
+      if (this.downloadJob === job) this.downloadJob = null
+      this.progress = { ...this.progress, download: null }
+      // ユーザーが明示的に落としたフォルダなので、クラウドモードを解いてタグ付けへ進む。
+      // まだ未ダウンロードのものが残っていれば、門番がまた止めてくれる。
+      if (!job.cancelled) this.guard.setCloudMode(false)
+      this.refreshProgress()
+      this.broadcastProgress(true)
+      // 落としたものをタグ付けし直す
+      this.queue = []
+      this.pump()
+    }
+  }
+
+  cancelDownload(): void {
+    if (this.downloadJob) this.downloadJob.cancelled = true
   }
 
   // ------------------------------------------------------------- internals
@@ -155,6 +235,12 @@ export class TaggerService {
     if (rootId === null) return
     if (!this.settings.get().autoScan) {
       this.setState('idle')
+      return
+    }
+    // クラウド同期フォルダとみなしている間は、勝手にダウンロードを起こさない。
+    // 「まとめてダウンロードしてタグ付け」か「常に読み込む」で明示的に再開する。
+    if (!this.guard.allowAutoRead()) {
+      this.setState('paused')
       return
     }
 
@@ -201,7 +287,7 @@ export class TaggerService {
     // iCloud のオンデマンドファイルは、読むとダウンロードが始まる。
     // ライブラリ全体を順に読む処理なので、実体が無いものは飛ばす。
     // scan_error に記録しておけば「失敗した画像を再試行」でやり直せる。
-    if (await this.isNotDownloaded(filePath)) {
+    if (await this.guard.isNotDownloaded(filePath)) {
       this.currentJob = null
       this.db.setScanError(record.id, PLACEHOLDER_MESSAGE)
       this.refreshProgress()
@@ -365,9 +451,17 @@ export class TaggerService {
   }
 
   private refreshProgress(): void {
+    const cloud = this.guard.status
     const rootId = this.library.currentRootId
     if (rootId === null) {
-      this.progress = { ...this.progress, done: 0, total: 0 }
+      this.progress = {
+        ...this.progress,
+        done: 0,
+        total: 0,
+        notDownloaded: 0,
+        cloudMode: cloud.cloudMode,
+        cloudReason: cloud.reason
+      }
       this.broadcastProgress()
       return
     }
@@ -375,7 +469,10 @@ export class TaggerService {
     this.progress = {
       ...this.progress,
       done: counts.total - counts.pending,
-      total: counts.total
+      total: counts.total,
+      notDownloaded: this.db.countScanErrors(rootId, PLACEHOLDER_MESSAGE),
+      cloudMode: cloud.cloudMode,
+      cloudReason: cloud.reason
     }
     this.broadcastProgress()
   }

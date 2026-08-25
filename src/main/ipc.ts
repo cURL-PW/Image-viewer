@@ -45,6 +45,8 @@ export function registerIpcHandlers(ctx: AppContext): void {
 
     const rootId = await ctx.library.setRoot(result.filePaths[0])
     ctx.db.setSetting(LAST_ROOT_KEY, String(rootId))
+    // フォルダが変われば、クラウドかどうかの判定もやり直す
+    ctx.guard.reset()
     ctx.tagger.notifyLibraryChanged()
     return currentRoot(ctx)
   })
@@ -118,6 +120,15 @@ export function registerIpcHandlers(ctx: AppContext): void {
 
   ipcMain.handle(IPC.getScanProgress, (): ScanProgress => ctx.tagger.getProgress())
 
+  ipcMain.handle(
+    IPC.downloadFolder,
+    async (_event, request: { dir: string; recursive: boolean }): Promise<void> => {
+      await ctx.tagger.downloadFolder(request.dir ?? '', request.recursive !== false)
+    }
+  )
+
+  ipcMain.handle(IPC.cancelDownload, (): void => ctx.tagger.cancelDownload())
+
   ipcMain.handle(IPC.getSettings, (): AppSettings => ctx.settings.get())
 
   ipcMain.handle(IPC.setSettings, async (_event, patch: Partial<AppSettings>): Promise<AppSettings> => {
@@ -125,6 +136,9 @@ export function registerIpcHandlers(ctx: AppContext): void {
 
     if (changed.includes('thumbnailSize')) {
       ctx.thumbs.setSize(settings.thumbnailSize)
+    }
+    if (changed.includes('alwaysReadCloudFiles')) {
+      ctx.guard.setAlwaysRead(settings.alwaysReadCloudFiles)
     }
     if (
       changed.includes('modelId') ||

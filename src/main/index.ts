@@ -9,6 +9,7 @@ import { Library } from './library'
 import { createResolver, registerImageProtocolHandlers, registerImageSchemes } from './protocol'
 import { LAST_ROOT_KEY, SettingsStore } from './settings'
 import { TaggerService } from './tagger/service'
+import { CloudGuard, DEFAULT_CLOUD_GUARD_OPTIONS } from './cloud-guard'
 import { DerivedImageCache } from './image-cache'
 
 /**
@@ -60,18 +61,29 @@ function createContext(): AppContext {
   const db = new LibraryDb(path.join(userData, 'library.db'))
   const settings = new SettingsStore(db)
   const library = new Library(db)
+  // クラウド同期フォルダで勝手にダウンロードが走らないようにする門番。
+  // しきい値は E2E から下げられるようにしておく。
+  const slowReadMs = Number(process.env.IMAGE_VIEWER_SLOW_READ_MS)
+  const guard = new CloudGuard({
+    ...DEFAULT_CLOUD_GUARD_OPTIONS,
+    slowReadMs: Number.isFinite(slowReadMs) ? slowReadMs : DEFAULT_CLOUD_GUARD_OPTIONS.slowReadMs
+  })
+  guard.setAlwaysRead(settings.get().alwaysReadCloudFiles)
+
   const thumbs = new DerivedImageCache({
     cacheDir: path.join(userData, 'thumbnails'),
     size: settings.get().thumbnailSize,
-    quality: 80
+    quality: 80,
+    guard
   })
   // HEIC は Chromium が表示できないので、元の解像度を保ったまま WebP へ変換して配信する
   const display = new DerivedImageCache({
     cacheDir: path.join(userData, 'display'),
     size: DISPLAY_MAX_EDGE,
-    quality: 88
+    quality: 88,
+    guard
   })
-  const tagger = new TaggerService(db, library, settings)
+  const tagger = new TaggerService(db, library, settings, guard, thumbs)
   const resolve = createResolver(db, library)
 
   library.on('change', (change) => {
@@ -84,7 +96,7 @@ function createContext(): AppContext {
     broadcast(IPC.eventIndexProgress, progress)
   })
 
-  return { db, library, thumbs, display, settings, tagger, resolve }
+  return { db, library, thumbs, display, settings, guard, tagger, resolve }
 }
 
 function createWindow(): BrowserWindow {
@@ -182,6 +194,7 @@ if (!app.requestSingleInstanceLock()) {
     if (cliRoot !== null) {
       const rootId = await context.library.setRoot(cliRoot)
       context.db.setSetting(LAST_ROOT_KEY, String(rootId))
+      context.guard.reset()
       broadcast(IPC.eventRootChanged, { id: rootId, path: cliRoot, indexed: false })
       context.tagger.notifyLibraryChanged()
     } else {

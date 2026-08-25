@@ -101,6 +101,24 @@ export default function SettingsDialog(): React.JSX.Element | null {
             </label>
           </section>
 
+          <section className="field field--inline">
+            <label htmlFor="cloudfiles">
+              <input
+                id="cloudfiles"
+                type="checkbox"
+                checked={settings.alwaysReadCloudFiles}
+                onChange={(event) =>
+                  void updateSettings({ alwaysReadCloudFiles: event.target.checked })
+                }
+              />
+              未ダウンロードの写真も読み込む
+            </label>
+            <p className="field__hint">
+              iCloud などのクラウド同期フォルダでは、既定で未ダウンロードの写真を読み込みません。
+              有効にすると、サムネイル生成やタグ付けのたびにダウンロードが走ります。
+            </p>
+          </section>
+
           <section className="field">
             <label htmlFor="thumb">
               サムネイルサイズ <strong>{settings.thumbnailSize}px</strong>

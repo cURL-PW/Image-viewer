@@ -427,6 +427,21 @@ export class LibraryDb {
     return { pending: row.pending ?? 0, failed: row.failed ?? 0, total: row.total }
   }
 
+  /** 特定のエラー文言が付いている画像の数。 */
+  countScanErrors(rootId: number, message: string): number {
+    const row = this.db
+      .prepare('SELECT COUNT(*) AS count FROM images WHERE root_id = ? AND scan_error = ?')
+      .get(rootId, message) as { count: number }
+    return row.count
+  }
+
+  /** 指定のエラー文言が付いていれば消し、再スキャン対象へ戻す。 */
+  clearScanError(imageId: number, message: string): void {
+    this.db
+      .prepare('UPDATE images SET scan_error = NULL WHERE id = ? AND scan_error = ?')
+      .run(imageId, message)
+  }
+
   /** モデル変更などで全画像を再スキャン対象に戻す。 */
   resetScanState(rootId: number, onlyErrors: boolean): void {
     if (onlyErrors) {

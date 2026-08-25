@@ -20,6 +20,7 @@ export default function ThumbnailGrid(): React.JSX.Element {
   const loading = useStore((state) => state.loading)
   const dir = useStore((state) => state.dir)
   const thumbnailSize = useStore((state) => state.settings?.thumbnailSize ?? 256)
+  const thumbEpoch = useStore((state) => state.thumbEpoch)
 
   const containerRef = useRef<HTMLDivElement>(null)
   const [viewport, setViewport] = useState({ width: 0, height: 0 })
@@ -123,7 +124,7 @@ export default function ThumbnailGrid(): React.JSX.Element {
                   {image && (
                     <img
                       className="cell__image"
-                      src={thumbUrl(image)}
+                      src={thumbUrl(image, thumbEpoch)}
                       alt={image.fileName}
                       loading="lazy"
                       draggable={false}

@@ -3,6 +3,7 @@ import type { LibraryDb } from './db'
 import type { Library } from './library'
 import type { ResolvedImage } from './protocol'
 import type { SettingsStore } from './settings'
+import type { CloudGuard } from './cloud-guard'
 import type { DerivedImageCache } from './image-cache'
 import type { TaggerService } from './tagger/service'
 
@@ -13,6 +14,7 @@ export interface AppContext {
   /** HEIC など、ブラウザが直接表示できない形式の表示用トランスコード */
   display: DerivedImageCache
   settings: SettingsStore
+  guard: CloudGuard
   tagger: TaggerService
   resolve: (id: number) => ResolvedImage | null
 }

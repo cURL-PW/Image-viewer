@@ -1,4 +1,5 @@
 import { useEffect } from 'react'
+import CloudBanner from './components/CloudBanner'
 import FolderTree from './components/FolderTree'
 import ImageViewer from './components/ImageViewer'
 import SettingsDialog from './components/SettingsDialog'
@@ -62,6 +63,7 @@ export default function App(): React.JSX.Element {
   return (
     <div className="app">
       <Toolbar />
+      <CloudBanner />
       <div className="app__body">
         <aside className="sidebar">
           <FolderTree />

@@ -91,6 +91,12 @@ export interface RootInfo {
   indexed: boolean
 }
 
+export interface DownloadProgress {
+  done: number
+  total: number
+  current: string | null
+}
+
 export interface ScanProgress {
   /** タグ付け済み枚数 */
   done: number
@@ -104,6 +110,14 @@ export interface ScanProgress {
   /** モデル準備 (ダウンロード) の進捗 0-1。準備中以外は null */
   modelProgress: number | null
   message: string | null
+  /** クラウド同期フォルダとみなして自動読み込みを止めているか */
+  cloudMode: boolean
+  /** なぜクラウドモードに入ったか */
+  cloudReason: 'placeholder' | 'slow' | 'manual' | null
+  /** 未ダウンロードとして飛ばした枚数 */
+  notDownloaded: number
+  /** 一括ダウンロードの進捗。実行していないときは null */
+  download: DownloadProgress | null
 }
 
 export interface IndexProgress {
@@ -128,6 +142,8 @@ export interface AppSettings {
   /** 'auto' は CUDA → DirectML → CPU の順に試行 */
   provider: 'auto' | 'cpu'
   autoScan: boolean
+  /** クラウド同期フォルダの未ダウンロード写真も自動で読み込む (既定は読み込まない) */
+  alwaysReadCloudFiles: boolean
   thumbnailSize: number
   /** 画像左右のページ送りクリック領域の比率 (0-0.5) */
   edgeClickRatio: number
@@ -141,6 +157,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   characterThreshold: 0.85,
   provider: 'auto',
   autoScan: true,
+  alwaysReadCloudFiles: false,
   thumbnailSize: 256,
   edgeClickRatio: 0.25,
   sortKey: 'path',
@@ -167,6 +184,8 @@ export const IPC = {
   listTags: 'tags:list',
   scanControl: 'scan:control',
   getScanProgress: 'scan:getProgress',
+  downloadFolder: 'library:downloadFolder',
+  cancelDownload: 'library:cancelDownload',
   getSettings: 'settings:get',
   setSettings: 'settings:set',
   // main → renderer
@@ -186,6 +205,12 @@ export function imageUrl(image: Pick<ImageRecord, 'id' | 'mtime'>): string {
   return `${IMAGE_PROTOCOL}://img/${image.id}?v=${image.mtime}`
 }
 
-export function thumbUrl(image: Pick<ImageRecord, 'id' | 'mtime'>): string {
-  return `${THUMB_PROTOCOL}://img/${image.id}?v=${image.mtime}`
+/**
+ * サムネイルの URL。
+ * `epoch` は、未ダウンロードだったものが落ちてきたときに <img> を読み直させるための番号。
+ * (雲タイルを表示済みの img は、URL が変わらない限り再要求しない)
+ */
+export function thumbUrl(image: Pick<ImageRecord, 'id' | 'mtime'>, epoch = 0): string {
+  const suffix = epoch > 0 ? `&e=${epoch}` : ''
+  return `${THUMB_PROTOCOL}://img/${image.id}?v=${image.mtime}${suffix}`
 }

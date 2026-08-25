@@ -704,3 +704,34 @@ select,
   color: var(--text-dim);
   font-size: 11px;
 }
+
+/* ----------------------------------------------------------------- banner */
+
+.banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--border);
+  background: #3a3320;
+  color: #f0d9a0;
+}
+
+.banner--progress {
+  background: #1f2c3d;
+  color: #b9d4f0;
+}
+
+.banner__text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.banner__toggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+  cursor: pointer;
+}

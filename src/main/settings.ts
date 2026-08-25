@@ -16,6 +16,7 @@ export function normalizeSettings(input: Partial<AppSettings>): AppSettings {
     characterThreshold: clamp(input.characterThreshold as number, 0.05, 0.99, DEFAULT_SETTINGS.characterThreshold),
     provider: input.provider === 'cpu' ? 'cpu' : 'auto',
     autoScan: input.autoScan !== false,
+    alwaysReadCloudFiles: input.alwaysReadCloudFiles === true,
     thumbnailSize: clamp(input.thumbnailSize as number, 96, 512, DEFAULT_SETTINGS.thumbnailSize),
     edgeClickRatio: clamp(input.edgeClickRatio as number, 0.05, 0.45, DEFAULT_SETTINGS.edgeClickRatio),
     sortKey: (['path', 'name', 'mtime', 'size'] as const).includes(input.sortKey as never)

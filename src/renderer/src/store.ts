@@ -49,6 +49,8 @@ interface State {
   scan: ScanProgress
   index: IndexProgress
   settingsOpen: boolean
+  /** 未ダウンロードだったサムネイルを読み直させるための番号 */
+  thumbEpoch: number
 }
 
 interface Actions {
@@ -81,7 +83,11 @@ const initialScan: ScanProgress = {
   provider: null,
   state: 'idle',
   modelProgress: null,
-  message: null
+  message: null,
+  cloudMode: false,
+  cloudReason: null,
+  notDownloaded: 0,
+  download: null
 }
 
 export const useStore = create<State & Actions>((set, get) => {
@@ -137,6 +143,7 @@ export const useStore = create<State & Actions>((set, get) => {
     scan: initialScan,
     index: { found: 0, scanning: false },
     settingsOpen: false,
+    thumbEpoch: 0,
 
     async init() {
       if (initStarted) return
@@ -175,7 +182,17 @@ export const useStore = create<State & Actions>((set, get) => {
         scheduleRefresh()
       })
 
-      window.api.onScanProgress((scanProgress) => set({ scan: scanProgress }))
+      window.api.onScanProgress((scanProgress) => {
+        const previous = get().scan
+        // 一括ダウンロードが終わった / クラウドモードが解けたときは、
+        // 雲タイルのまま止まっているサムネイルを読み直す
+        const downloadFinished = previous.download !== null && scanProgress.download === null
+        const cloudCleared = previous.cloudMode && !scanProgress.cloudMode
+        set((state) => ({
+          scan: scanProgress,
+          thumbEpoch: downloadFinished || cloudCleared ? state.thumbEpoch + 1 : state.thumbEpoch
+        }))
+      })
       window.api.onIndexProgress((indexProgress) => set({ index: indexProgress }))
       window.api.onImageTagged(() => scheduleRefresh(TAGGED_DEBOUNCE))
 

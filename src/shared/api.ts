@@ -35,6 +35,9 @@ export interface RendererApi {
   revealImage(id: number): Promise<void>
   listTags(request: TagListRequest): Promise<TagInfo[]>
   scanControl(command: ScanCommand): Promise<ScanProgress>
+  /** 指定フォルダ配下をまとめてダウンロードし、タグ付けの対象へ戻す */
+  downloadFolder(request: { dir: string; recursive: boolean }): Promise<void>
+  cancelDownload(): Promise<void>
   getScanProgress(): Promise<ScanProgress>
   getSettings(): Promise<AppSettings>
   setSettings(patch: Partial<AppSettings>): Promise<AppSettings>
