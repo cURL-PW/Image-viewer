@@ -6,7 +6,8 @@
 
 ## 主な機能
 
-- **再帰読み込み** — ルートフォルダ配下のすべての画像 (jpg / png / webp / gif / bmp / avif) を収集
+- **再帰読み込み** — ルートフォルダ配下のすべての画像 (jpg / png / webp / gif / bmp / avif / **heic**) を収集
+- **iCloud / iPhone の写真** — HEIC をそのまま閲覧・タグ付けできる。同期フォルダを開くだけで使える
 - **リアルタイム反映** — ファイルの追加・変更・削除を監視して即座に反映。起動時は差分同期で、アプリを閉じている間の変化にも追随
 - **ビューアー** — 既定でウィンドウ幅いっぱい (fit-width) に表示。画像の左右端クリックで前後の画像へ、ホイールでカーソル位置を中心に拡大縮小、ドラッグでパン、ダブルクリックで元に戻す
 - **ライブラリ** — フォルダ階層ツリー (枚数バッジ付き) と仮想スクロールのサムネイルグリッド
@@ -54,6 +55,28 @@ npm run dev
 ```bash
 npx install-electron
 ```
+
+## iCloud の写真を見る (Windows)
+
+Windows 版 iCloud が同期しているフォルダを、そのままルートフォルダとして開けます。
+
+```
+%USERPROFILE%\Pictures\iCloud Photos
+```
+
+iPhone の既定形式である **HEIC に対応**しています。HEIC は Chromium も sharp のプリビルドも
+そのままでは扱えないため、WASM 版 libheif で復号し、表示用に変換したものをキャッシュして表示します。
+追加のセットアップは要りません。Live Photos の `.mov` と編集情報の `.aae` は自動的に無視されます。
+
+### 未ダウンロードの写真について
+
+iCloud で「ストレージを最適化」にしていると、実体がクラウドにあるプレースホルダが並びます。
+これは **読み込むとダウンロードが始まる**ため、ライブラリ全体を順に読むタグ付けは
+未ダウンロードのファイルを飛ばし、「未ダウンロード」と記録します
+(サムネイルは表示したものだけ生成するので、必要な分だけ落ちてきます)。
+
+あとからタグを付けたい場合は、エクスプローラーでフォルダを右クリックして
+「このデバイス上で常に保持する」を選び、設定画面の「失敗した画像を再試行」を実行してください。
 
 ## 使い方
 
@@ -107,6 +130,13 @@ pip install onnx numpy
 python3 e2e/fixtures/make-model.py
 ```
 
+HEIC の経路は、実物の HEVC ファイル (`e2e/fixtures/sample.heic`) で検証しています。こちらも再生成できます。
+
+```bash
+pip install pillow-heif
+python3 e2e/fixtures/make-heic.py
+```
+
 ヘッドレス環境では `xvfb-run -a npm run e2e` のように実行してください。
 
 ### 構成
@@ -117,7 +147,8 @@ src/
 │  ├─ index.ts        起動・ウィンドウ・プロトコル登録
 │  ├─ db.ts           SQLite スキーマとクエリ
 │  ├─ library.ts      再帰走査・差分同期・ファイル監視
-│  ├─ thumbnails.ts   サムネイル生成とディスクキャッシュ
+│  ├─ images.ts       画像を開く入口 (HEIC の復号と EXIF の向き補正)
+│  ├─ image-cache.ts  サムネイル / 表示用変換のディスクキャッシュ
 │  ├─ protocol.ts     app-image:// / app-thumb:// の配信
 │  ├─ ipc.ts          IPC ハンドラ
 │  └─ tagger/         モデル管理・推論ワーカー・スキャンキュー
@@ -132,6 +163,9 @@ src/
 - **推論は utilityProcess で実行** — onnxruntime と sharp の重い処理をメインプロセスから切り離し、UI の応答性を保ちます
 - **画像は ID でのみ参照** — renderer にはファイルパスを渡さず、`app-image://` プロトコル側でルート配下かを検証してから配信します
 - **並び順は自然順** — `p2.jpg` が `p10.jpg` より前に来るよう、DB に自然順ソート用のキーを持たせています
+- **HEIC は WASM で復号** — sharp のプリビルドに含まれる libheif には HEVC デコーダ (libde265) が
+  無く、コンテナは読めても画素まで復号できません。`src/main/images.ts` が WASM 版 libheif での
+  復号と EXIF orientation の適用を引き受け、他のコードは形式を意識せずに済むようにしています
 
 ## トラブルシューティング
 
@@ -153,6 +187,12 @@ npx install-electron
 | Windows | `%LOCALAPPDATA%\electron\Cache` |
 | macOS | `~/Library/Caches/electron` |
 | Linux | `~/.cache/electron` |
+
+### HEIC の読み込みが遅い
+
+HEIC の復号は WASM 版 libheif で行うため、JPEG より時間がかかります (12MP でおよそ
+0.3〜1 秒/枚)。初回のサムネイル生成とタグ付けは HEIC 中心のライブラリだと時間がかかりますが、
+一度作ったサムネイルと表示用の変換結果はディスクにキャッシュされるので、2 回目以降は速くなります。
 
 ### Linux で sharp の互換性警告が出る
 

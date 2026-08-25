@@ -88,3 +88,18 @@ export async function installDummyModel(fixture: Fixture): Promise<void> {
 export async function removeFixture(fixture: Fixture): Promise<void> {
   await fs.rm(path.dirname(fixture.root), { recursive: true, force: true })
 }
+
+/** iCloud / iPhone の写真を模した HEIC。sharp では復号できず WASM 経由になる。 */
+export const HEIC_FILE = 'iphone/IMG_0001.HEIC'
+
+/**
+ * 通常のフィクスチャに HEIC を 1 枚足したもの。
+ * `e2e/fixtures/sample.heic` は make-heic.py で生成した実物の HEVC ファイル。
+ */
+export async function createFixtureWithHeic(): Promise<Fixture & { heicPath: string }> {
+  const fixture = await createFixture()
+  const heicPath = path.join(fixture.root, ...HEIC_FILE.split('/'))
+  await fs.mkdir(path.dirname(heicPath), { recursive: true })
+  await fs.copyFile(path.join(__dirname, 'fixtures', 'sample.heic'), heicPath)
+  return { ...fixture, heicPath }
+}

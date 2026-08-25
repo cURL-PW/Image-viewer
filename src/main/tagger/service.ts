@@ -1,3 +1,4 @@
+import fs from 'node:fs/promises'
 import path from 'node:path'
 import { app, utilityProcess, type UtilityProcess } from 'electron'
 import { IPC, type ImageRecord, type ScanCommand, type ScanProgress } from '@shared/types'
@@ -5,6 +6,7 @@ import { broadcast } from '../context'
 import type { LibraryDb } from '../db'
 import type { Library } from '../library'
 import type { SettingsStore } from '../settings'
+import { isPlaceholderFile } from '../library'
 import { ensureModel } from './model'
 import { providerCandidates, type WorkerRequest, type WorkerResponse } from './protocol'
 
@@ -12,6 +14,8 @@ import { providerCandidates, type WorkerRequest, type WorkerResponse } from './p
 const QUEUE_CHUNK = 64
 /** 進捗ブロードキャストの最小間隔 (ms) */
 const PROGRESS_INTERVAL = 250
+/** 未ダウンロードのクラウドファイルに付ける印 */
+const PLACEHOLDER_MESSAGE = '未ダウンロード (iCloud などのオンデマンドファイル)'
 /** 同じ画像でワーカーが連続クラッシュした場合に諦めるまでの回数 */
 const MAX_JOB_RETRIES = 2
 
@@ -118,6 +122,16 @@ export class TaggerService {
     await this.disposeWorker()
   }
 
+  /** 実体がローカルに無いファイルか (Windows のクラウドプレースホルダ)。 */
+  private async isNotDownloaded(filePath: string): Promise<boolean> {
+    if (process.platform !== 'win32') return false
+    try {
+      return isPlaceholderFile(await fs.stat(filePath))
+    } catch {
+      return false
+    }
+  }
+
   // ------------------------------------------------------------- internals
 
   private async disposeWorker(): Promise<void> {
@@ -166,15 +180,35 @@ export class TaggerService {
     }
 
     const record = this.queue.shift() as ImageRecord
-    this.dispatch(record)
+    void this.dispatch(record)
   }
 
-  private dispatch(record: ImageRecord): void {
+  private async dispatch(record: ImageRecord): Promise<void> {
     const rootPath = this.library.currentRootPath
-    if (!rootPath || !this.worker) return
+    if (!rootPath || !this.worker) {
+      // 取り出した 1 件を捨てずにキューへ戻す
+      this.queue.unshift(record)
+      return
+    }
 
+    // await をまたぐ前に処理枠を押さえる。ここで currentJob を空のままにすると
+    // 次の pump() が同時に走り、2 件が並行してワーカーへ流れてしまう。
     const job = { id: this.nextJobId++, record, retries: 0 }
     this.currentJob = job
+
+    const filePath = path.resolve(rootPath, record.relPath)
+
+    // iCloud のオンデマンドファイルは、読むとダウンロードが始まる。
+    // ライブラリ全体を順に読む処理なので、実体が無いものは飛ばす。
+    // scan_error に記録しておけば「失敗した画像を再試行」でやり直せる。
+    if (await this.isNotDownloaded(filePath)) {
+      this.currentJob = null
+      this.db.setScanError(record.id, PLACEHOLDER_MESSAGE)
+      this.refreshProgress()
+      this.pump()
+      return
+    }
+
     this.progress = { ...this.progress, current: record.fileName }
     this.setState('running')
 
@@ -182,7 +216,7 @@ export class TaggerService {
     this.worker.postMessage({
       type: 'infer',
       jobId: job.id,
-      filePath: path.resolve(rootPath, record.relPath),
+      filePath,
       generalThreshold: settings.generalThreshold,
       characterThreshold: settings.characterThreshold
     } satisfies WorkerRequest)
@@ -233,7 +267,7 @@ export class TaggerService {
       this.worker = worker
 
       worker.on('message', (message: WorkerResponse) => this.onWorkerMessage(message, resolve))
-      worker.on('exit', (code) => this.onWorkerExit(code, resolve))
+      worker.on('exit', (code) => this.onWorkerExit(worker, code, resolve))
 
       worker.postMessage({
         type: 'init',
@@ -295,10 +329,14 @@ export class TaggerService {
     }
   }
 
-  private onWorkerExit(code: number, resolveInit: () => void): void {
+  private onWorkerExit(worker: UtilityProcess, code: number, resolveInit: () => void): void {
+    resolveInit()
+    // 作り直した後に古いワーカーの exit が届くことがある。その場合に
+    // 後始末を走らせると、起動したばかりのワーカーの参照まで消してしまう。
+    if (this.worker !== worker) return
+
     this.workerReady = false
     this.worker = null
-    resolveInit()
     if (this.disposed) return
 
     const job = this.currentJob

@@ -17,7 +17,11 @@ export const SUPPORTED_EXTENSIONS = [
   '.webp',
   '.gif',
   '.bmp',
-  '.avif'
+  '.avif',
+  // iPhone / iCloud の既定形式。Chromium も sharp も直接は扱えないため
+  // WASM 版 libheif で復号し、表示用に変換して配信する
+  '.heic',
+  '.heif'
 ] as const
 
 export interface ImageRecord {

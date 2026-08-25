@@ -15,6 +15,19 @@ export function isSupportedImage(filePath: string): boolean {
   return EXTENSIONS.has(path.extname(filePath).toLowerCase())
 }
 
+/**
+ * iCloud や OneDrive のオンデマンドファイル (実体がクラウドにあり、読むと
+ * ダウンロードが始まるプレースホルダ) かどうか。
+ *
+ * Windows では libuv が st_blocks を AllocationSize から埋めるため、
+ * 「論理サイズはあるが割り当て 0」で未ダウンロードを判別できる。
+ * 他の OS ではスパースファイルと区別が付かないので常に false を返す。
+ */
+export function isPlaceholderFile(stats: { size: number; blocks: number }, platform = process.platform): boolean {
+  if (platform !== 'win32') return false
+  return stats.size > 0 && stats.blocks === 0
+}
+
 /** OS 依存の区切り文字を DB 上の posix 表記へ正規化する。 */
 export function toRelPath(rootPath: string, fullPath: string): string {
   return path.relative(rootPath, fullPath).split(path.sep).join('/')

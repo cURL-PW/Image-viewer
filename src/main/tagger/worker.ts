@@ -2,7 +2,6 @@
  * WD14 tagger の推論を行う utilityProcess ワーカー。
  * onnxruntime と sharp の重い処理を main プロセスから切り離し、UI の応答性を守る。
  */
-import sharp from 'sharp'
 import * as ort from 'onnxruntime-node'
 import { TagCategory } from '@shared/types'
 import type { TagResult } from '../db'
@@ -78,8 +77,9 @@ async function init(request: Extract<WorkerRequest, { type: 'init' }>): Promise<
 async function preprocess(
   filePath: string
 ): Promise<{ tensor: ort.Tensor; width: number; height: number }> {
-  const image = sharp(filePath, { failOn: 'none', animated: false }).rotate()
-  const metadata = await image.metadata()
+  // openImage が HEIC の復号と EXIF の向き補正を吸収する
+  const { openImage } = await import('../images')
+  const { image, width, height } = await openImage(filePath)
 
   const { data } = await image
     .flatten({ background: '#ffffff' })
@@ -104,11 +104,10 @@ async function preprocess(
     tensorData[dst + 2] = data[src]
   }
 
-  const rotated = metadata.orientation !== undefined && metadata.orientation >= 5
   return {
     tensor: new ort.Tensor('float32', tensorData, [1, inputSize, inputSize, 3]),
-    width: (rotated ? metadata.height : metadata.width) ?? 0,
-    height: (rotated ? metadata.width : metadata.height) ?? 0
+    width,
+    height
   }
 }
 

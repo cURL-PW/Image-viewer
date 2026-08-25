@@ -4,7 +4,8 @@ import { net, protocol } from 'electron'
 import { IMAGE_PROTOCOL, THUMB_PROTOCOL, type ImageRecord } from '@shared/types'
 import type { LibraryDb } from './db'
 import type { Library } from './library'
-import type { ThumbnailCache } from './thumbnails'
+import type { DerivedImageCache } from './image-cache'
+import { isHeifPath } from './images'
 
 /** app ready より前に呼ぶ必要がある。 */
 export function registerImageSchemes(): void {
@@ -55,9 +56,21 @@ function parseId(url: string): number | null {
 
 const NOT_FOUND = (): Response => new Response('not found', { status: 404 })
 
+/** 生成済みバッファを、内容が変わらない前提のキャッシュヘッダ付きで返す。 */
+function derivedResponse(buffer: Buffer): Response {
+  return new Response(new Uint8Array(buffer), {
+    headers: {
+      'Content-Type': 'image/webp',
+      // URL に mtime を含めているので、内容が変わればキャッシュも自然に切り替わる
+      'Cache-Control': 'public, max-age=31536000, immutable'
+    }
+  })
+}
+
 export function registerImageProtocolHandlers(
   resolve: (id: number) => ResolvedImage | null,
-  thumbs: ThumbnailCache
+  thumbs: DerivedImageCache,
+  display: DerivedImageCache
 ): void {
   protocol.handle(IMAGE_PROTOCOL, async (request) => {
     const id = parseId(request.url)
@@ -65,6 +78,11 @@ export function registerImageProtocolHandlers(
     const target = resolve(id)
     if (!target) return NOT_FOUND()
     try {
+      // Chromium は HEIC を表示できないので、表示用に変換したものを返す。
+      // それ以外は元ファイルをそのまま流す (変換のコストをかけない)。
+      if (isHeifPath(target.fullPath)) {
+        return derivedResponse(await display.get(target.record, target.fullPath))
+      }
       return await net.fetch(pathToFileURL(target.fullPath).toString())
     } catch {
       return NOT_FOUND()
@@ -77,14 +95,7 @@ export function registerImageProtocolHandlers(
     const target = resolve(id)
     if (!target) return NOT_FOUND()
     try {
-      const buffer = await thumbs.get(target.record, target.fullPath)
-      return new Response(new Uint8Array(buffer), {
-        headers: {
-          'Content-Type': 'image/webp',
-          // URL に mtime を含めているので、内容が変わればキャッシュも自然に切り替わる
-          'Cache-Control': 'public, max-age=31536000, immutable'
-        }
-      })
+      return derivedResponse(await thumbs.get(target.record, target.fullPath))
     } catch {
       return NOT_FOUND()
     }

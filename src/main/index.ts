@@ -9,7 +9,13 @@ import { Library } from './library'
 import { createResolver, registerImageProtocolHandlers, registerImageSchemes } from './protocol'
 import { LAST_ROOT_KEY, SettingsStore } from './settings'
 import { TaggerService } from './tagger/service'
-import { ThumbnailCache } from './thumbnails'
+import { DerivedImageCache } from './image-cache'
+
+/**
+ * 表示用トランスコードの長辺上限。iPhone の 12MP (4032x3024) はそのまま収まるので、
+ * 実質的に元解像度を保ったまま Chromium が表示できる形式へ変換できる。
+ */
+const DISPLAY_MAX_EDGE = 4096
 
 // registerSchemesAsPrivileged は app ready より前に呼ぶ必要がある
 registerImageSchemes()
@@ -54,10 +60,17 @@ function createContext(): AppContext {
   const db = new LibraryDb(path.join(userData, 'library.db'))
   const settings = new SettingsStore(db)
   const library = new Library(db)
-  const thumbs = new ThumbnailCache(
-    path.join(userData, 'thumbnails'),
-    settings.get().thumbnailSize
-  )
+  const thumbs = new DerivedImageCache({
+    cacheDir: path.join(userData, 'thumbnails'),
+    size: settings.get().thumbnailSize,
+    quality: 80
+  })
+  // HEIC は Chromium が表示できないので、元の解像度を保ったまま WebP へ変換して配信する
+  const display = new DerivedImageCache({
+    cacheDir: path.join(userData, 'display'),
+    size: DISPLAY_MAX_EDGE,
+    quality: 88
+  })
   const tagger = new TaggerService(db, library, settings)
   const resolve = createResolver(db, library)
 
@@ -71,7 +84,7 @@ function createContext(): AppContext {
     broadcast(IPC.eventIndexProgress, progress)
   })
 
-  return { db, library, thumbs, settings, tagger, resolve }
+  return { db, library, thumbs, display, settings, tagger, resolve }
 }
 
 function createWindow(): BrowserWindow {
@@ -159,7 +172,7 @@ if (!app.requestSingleInstanceLock()) {
     applyContentSecurityPolicy()
 
     context = createContext()
-    registerImageProtocolHandlers(context.resolve, context.thumbs)
+    registerImageProtocolHandlers(context.resolve, context.thumbs, context.display)
     registerIpcHandlers(context)
 
     createWindow()
