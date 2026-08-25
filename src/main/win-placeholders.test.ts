@@ -105,3 +105,32 @@ describe('listPlaceholders', () => {
     expect(await listPlaceholders('C:\\Photos', { run, platform: 'win32' })).toBeNull()
   })
 })
+
+describe('アプリ側のパスとの照合', () => {
+  // 一覧の鍵は PowerShell の FullName、引くのは path.resolve(root, relPath) で作った
+  // パス。ここが食い違うと 1 枚も弾けなくなるので、実際の組み合わせで確かめる。
+  const output = [
+    'C:\\Users\\Alice\\Pictures\\iCloud Photos\\Photos\\IMG_8582.HEIC',
+    'C:\\Users\\Alice\\Pictures\\iCloud Photos\\Photos\\IMG_8583.HEIC'
+  ].join('\r\n')
+
+  it('ルートの大文字小文字が違っても一致する', () => {
+    const index = parseScanOutput(output)
+    // ユーザーがフォルダを選び直すと、同じ場所でも表記が変わることがある
+    const picked = 'c:\\users\\alice\\pictures\\icloud photos'
+    const full = `${picked}\\Photos\\IMG_8582.HEIC`
+    expect(index.has(normalizePath(full))).toBe(true)
+  })
+
+  it('区切りが / でも一致する', () => {
+    const index = parseScanOutput(output)
+    const full = 'C:/Users/Alice/Pictures/iCloud Photos/Photos/IMG_8583.HEIC'
+    expect(index.has(normalizePath(full))).toBe(true)
+  })
+
+  it('別のファイルは一致しない', () => {
+    const index = parseScanOutput(output)
+    const full = 'C:\\Users\\Alice\\Pictures\\iCloud Photos\\Photos\\IMG_9999.HEIC'
+    expect(index.has(normalizePath(full))).toBe(false)
+  })
+})

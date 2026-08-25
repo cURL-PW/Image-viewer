@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process'
+import { debugLog } from './debug-log'
 
 /**
  * Windows のクラウド同期プレースホルダを、ファイル属性から確実に見つける。
@@ -100,11 +101,31 @@ export async function listPlaceholders(
 
   const args = buildScanArgs(rootPath)
   const run = options.run ?? ((a: string[]) => runPowerShell(a, options.timeoutMs ?? 120_000))
+  const startedAt = Date.now()
+  debugLog().log({ kind: 'ps-scan', decision: 'allowed', target: rootPath, note: '列挙を開始' })
 
   try {
-    return parseScanOutput(await run(args))
+    const paths = parseScanOutput(await run(args))
+    // 先頭の 1 件を残しておく。DB 側のパスと突き合わせて、
+    // 照合が外れていないかを目で確かめられるようにするため
+    const sample = paths.values().next().value ?? 'なし'
+    debugLog().log({
+      kind: 'ps-scan',
+      decision: 'allowed',
+      ms: Date.now() - startedAt,
+      target: rootPath,
+      note: `未ダウンロード ${paths.size} 件 例: ${sample}`
+    })
+    return paths
   } catch (error) {
     console.warn('[cloud] プレースホルダの列挙に失敗しました', error)
+    debugLog().log({
+      kind: 'ps-scan',
+      decision: 'skipped',
+      ms: Date.now() - startedAt,
+      target: rootPath,
+      note: `失敗: ${error instanceof Error ? error.message : String(error)}`
+    })
     return null
   }
 }

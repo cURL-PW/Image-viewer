@@ -5,6 +5,7 @@ import { IMAGE_PROTOCOL, THUMB_PROTOCOL, type ImageRecord } from '@shared/types'
 import type { LibraryDb } from './db'
 import type { Library } from './library'
 import { isNotDownloadedError } from './cloud-guard'
+import { debugLog } from './debug-log'
 import type { DerivedImageCache } from './image-cache'
 import { isHeifPath } from './images'
 
@@ -101,6 +102,7 @@ export function registerImageProtocolHandlers(
     if (id === null) return NOT_FOUND()
     const target = resolve(id)
     if (!target) return NOT_FOUND()
+    const startedAt = Date.now()
     try {
       // 単画像ビューはユーザーが明示的に開いた操作なので、未ダウンロードでも
       // この 1 枚だけはダウンロードして表示する (force)。
@@ -110,8 +112,22 @@ export function registerImageProtocolHandlers(
       if (isHeifPath(target.fullPath)) {
         return derivedResponse(await display.get(target.record, target.fullPath, { force: true }))
       }
-      return await net.fetch(pathToFileURL(target.fullPath).toString())
-    } catch {
+      const response = await net.fetch(pathToFileURL(target.fullPath).toString())
+      debugLog().log({
+        kind: 'viewer-fetch',
+        decision: 'forced',
+        ms: Date.now() - startedAt,
+        target: target.record.relPath
+      })
+      return response
+    } catch (error) {
+      debugLog().log({
+        kind: 'viewer-fetch',
+        decision: 'skipped',
+        ms: Date.now() - startedAt,
+        target: target.record.relPath,
+        note: error instanceof Error ? error.message : String(error)
+      })
       return NOT_FOUND()
     }
   })
@@ -126,6 +142,12 @@ export function registerImageProtocolHandlers(
     } catch (error) {
       // 未ダウンロードのものは読まず、雲のタイルで「まだ手元に無い」と示す
       if (isNotDownloadedError(error)) return cloudTileResponse()
+      debugLog().log({
+        kind: 'thumb-fetch',
+        decision: 'skipped',
+        target: target.record.relPath,
+        note: error instanceof Error ? error.message : String(error)
+      })
       return NOT_FOUND()
     }
   })

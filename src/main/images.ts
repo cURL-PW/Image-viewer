@@ -2,6 +2,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import sharp from 'sharp'
 import type { Sharp } from 'sharp'
+import { debugLog } from './debug-log'
 
 /**
  * 画像を開く唯一の入口。
@@ -118,6 +119,19 @@ async function openHeif(filePath: string): Promise<OpenedImage> {
  * 呼び出し側はここから resize や raw 取り出しへ続ければよい。
  */
 export async function openImage(filePath: string): Promise<OpenedImage> {
+  // 画素を読む地点。クラウドの未ダウンロードファイルなら、ここでダウンロードが始まる
+  const startedAt = Date.now()
+  const opened = await openImageInner(filePath)
+  debugLog().log({
+    kind: 'open-image',
+    decision: 'allowed',
+    ms: Date.now() - startedAt,
+    target: filePath
+  })
+  return opened
+}
+
+async function openImageInner(filePath: string): Promise<OpenedImage> {
   if (isHeifPath(filePath)) return openHeif(filePath)
 
   const image = sharp(filePath, { failOn: 'none', animated: false })

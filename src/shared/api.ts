@@ -1,6 +1,7 @@
 import type {
   AppSettings,
   CloudDiagnostics,
+  DebugLogInfo,
   FolderNode,
   ImageQuery,
   ImageRecord,
@@ -41,6 +42,12 @@ export interface RendererApi {
   cancelDownload(): Promise<void>
   /** クラウド判定の診断情報 (設定画面で表示する) */
   getDiagnostics(): Promise<CloudDiagnostics>
+  /** デバッグログの状態 */
+  getLogInfo(): Promise<DebugLogInfo>
+  /** 末尾 n 行を読む (「直近をコピー」用) */
+  readLogTail(lines: number): Promise<string>
+  openLogFolder(): Promise<void>
+  clearLog(): Promise<void>
   getScanProgress(): Promise<ScanProgress>
   getSettings(): Promise<AppSettings>
   setSettings(patch: Partial<AppSettings>): Promise<AppSettings>

@@ -6,6 +6,7 @@ import type {
   ReadKind,
   ReadSample
 } from '@shared/types'
+import { debugLog } from './debug-log'
 import { normalizePath } from './win-placeholders'
 
 /**
@@ -14,15 +15,21 @@ import { normalizePath } from './win-placeholders'
  * 未ダウンロードのファイルは読むとダウンロードが始まり、1 枚あたり数秒かかる。
  * サムネイル生成やタグ付けが自動でそれを繰り返すと、通信も待ち時間も止まらなくなる。
  *
- * 判定は 2 段構えにしている:
+ * 状態は 2 つに分けて持つ。混ぜると「案内は出ているのに読み込みは止まっていない」
+ * という取り違えが起きる (実際に一度そのバグを入れた)。
  *
- * 1. **プレースホルダ属性の推測** — Windows で「論理サイズはあるが実体の割り当てが無い」
- *    ファイルを見つける。当たれば 1 枚も落とさずに済むが、同期クライアントの実装に依存する
+ * - `cloudFolder` — 未ダウンロードの写真があるフォルダらしい。**案内を出すための情報**
+ * - `blocked` — 自動読み込みを止めている。**実際に読ませないための状態**
+ *
+ * 未ダウンロードかどうかの判定も 2 段構えにしている:
+ *
+ * 1. **ファイル属性の一覧** — 1 枚ずつ確実に弾ける。ローカルの写真はそのまま扱えるので
+ *    フォルダ全体を止めずに済む。ただし列挙の失敗やパスの食い違いで取りこぼしうる
  * 2. **遅さの回路遮断器** — 読み込みが遅い状態が続いたら、以後の自動読み込みを止める。
- *    OS の内部仕様に依存しないので、1 が外れてもここで確実に止まる
+ *    1 が当たっていようがいまいが最後の砦として常に効かせる
  *
  * 逆に、ユーザーが明示的に開いた 1 枚や一括ダウンロードは門番を素通りさせる。
- * その読み込みが速ければ自動でクラウドモードを解除する (自己回復)。
+ * その読み込みが速ければ自動で解除する (自己回復)。
  */
 
 export interface PlaceholderStats {
@@ -51,19 +58,24 @@ export function isLikelyPlaceholder(
 export type CloudModeReason = 'placeholder' | 'slow' | 'manual' | 'remembered' | null
 
 export interface CloudStatus {
-  cloudMode: boolean
+  /** 未ダウンロードの写真があるフォルダとみなしているか (案内用) */
+  cloudFolder: boolean
+  /** 自動読み込みを止めているか (実際の遮断) */
+  blocked: boolean
   reason: CloudModeReason
 }
 
 /** 診断で保持する履歴の件数 */
 const SAMPLE_LIMIT = 20
+/** 一覧による判定は件数が多いので、この件数ごとにまとめて 1 行だけ記録する */
+const INDEX_LOG_INTERVAL = 200
 
 export interface CloudGuardOptions {
   /** これを超える読み込みを「遅い」とみなす (ms) */
   slowReadMs: number
-  /** 「遅い」が何回続いたらクラウドモードへ入るか */
+  /** 「遅い」が何回続いたら遮断するか */
   slowReadLimit: number
-  /** クラウドモード中に「速い」が何回続いたら解除するか */
+  /** 遮断中に「速い」が何回続いたら解除するか */
   fastRecoveryLimit: number
 }
 
@@ -78,7 +90,8 @@ interface CloudGuardEvents {
 }
 
 export class CloudGuard extends EventEmitter<CloudGuardEvents> {
-  private cloudMode = false
+  private cloudFolder = false
+  private blocked = false
   private reason: CloudModeReason = null
   private consecutiveSlow = 0
   private consecutiveFast = 0
@@ -91,17 +104,26 @@ export class CloudGuard extends EventEmitter<CloudGuardEvents> {
    * これがあれば推測が要らないので、フォルダ全体を止めずに 1 枚ずつ弾ける。
    */
   private placeholderIndex: Set<string> | null = null
+  /** 一覧による判定の集計 (ログを溢れさせないため) */
+  private indexHits = 0
+  private indexMisses = 0
 
   constructor(private readonly options: CloudGuardOptions = DEFAULT_CLOUD_GUARD_OPTIONS) {
     super()
   }
 
   get status(): CloudStatus {
-    return { cloudMode: this.cloudMode, reason: this.reason }
+    return { cloudFolder: this.cloudFolder, blocked: this.blocked, reason: this.reason }
   }
 
-  get isCloudMode(): boolean {
-    return this.cloudMode
+  /** 未ダウンロードの写真があるフォルダとみなしているか。 */
+  get isCloudFolder(): boolean {
+    return this.cloudFolder
+  }
+
+  /** 自動読み込みを止めているか。「常に読み込む」は考慮しない生の状態。 */
+  get isBlocked(): boolean {
+    return this.blocked
   }
 
   /** 設定画面へ出す診断情報。 */
@@ -127,69 +149,103 @@ export class CloudGuard extends EventEmitter<CloudGuardEvents> {
   markDownloaded(filePath: string): void {
     if (this.placeholderIndex === null) return
     if (!this.placeholderIndex.delete(normalizePath(filePath))) return
-    // 全部落ちたならクラウドモードを解いてよい
-    if (this.placeholderIndex.size === 0) this.setCloudMode(false)
+    // 全部落ちたなら案内も遮断も解いてよい
+    if (this.placeholderIndex.size === 0) this.release()
   }
 
-  /** ファイル属性から作った一覧を差し込む。null で推測モードへ戻す。 */
+  /**
+   * ファイル属性から作った一覧を差し込む。null で推測モードへ戻す。
+   *
+   * 一覧があっても遮断は解除しない。列挙が成功しても、パスの食い違いなどで
+   * 判定が外れることはありうる。そのときに全部読みに行かないよう、
+   * 遅さの遮断器は最後の砦として残しておく。
+   */
   setPlaceholderIndex(paths: Set<string> | null): void {
     this.placeholderIndex = paths
-    if (paths && paths.size > 0) this.enterCloudMode('placeholder')
+    this.indexHits = 0
+    this.indexMisses = 0
+    debugLog().log({
+      kind: 'guard-index',
+      decision: paths === null ? 'skipped' : 'allowed',
+      note: paths === null ? '一覧なし (遅さの遮断器のみ)' : `未ダウンロード ${paths.size} 件`
+    })
+    if (paths && paths.size > 0) this.markCloudFolder('placeholder')
     else this.emitChange()
   }
 
   /**
    * サムネイル生成やタグ付けなど、自動で走る読み込みを許可してよいか。
    *
-   * 正確な一覧があるときは、どのファイルが危険かを個別に判定できるので
-   * 全体を止める必要がない (ローカルにある写真はそのまま扱える)。
+   * 判定の精度によらず、遮断中は必ず止める。1 枚ずつの判定 (`isNotDownloaded`) は
+   * この先で別途行う。
    */
   allowAutoRead(): boolean {
-    if (this.alwaysRead) return true
-    if (this.placeholderIndex !== null) return true
-    return !this.cloudMode
+    return this.alwaysRead || !this.blocked
   }
 
   /** 設定の「未ダウンロードの写真も読み込む」。 */
   setAlwaysRead(on: boolean): void {
     if (this.alwaysRead === on) return
     this.alwaysRead = on
+    debugLog().log({
+      kind: 'guard-mode',
+      decision: on ? 'forced' : 'blocked',
+      note: `常に読み込む=${on}`
+    })
     this.emitChange()
   }
 
   /**
    * ルートを切り替えたら判定をやり直す。
    * 以前クラウドと判定したフォルダは、再び数枚ダウンロードして確かめ直さずに済むよう
-   * `remembered` を渡して最初からクラウドモードで始められる。
+   * `remembered` を渡して最初から遮断した状態で始められる。
    */
   reset(remembered = false): void {
-    const changed = this.cloudMode !== remembered
-    this.cloudMode = remembered
+    const changed = this.cloudFolder !== remembered || this.blocked !== remembered
+    this.cloudFolder = remembered
+    this.blocked = remembered
     this.reason = remembered ? 'remembered' : null
     this.consecutiveSlow = 0
     this.consecutiveFast = 0
     this.reads = []
     this.placeholders = []
     this.placeholderIndex = null
+    this.indexHits = 0
+    this.indexMisses = 0
+    debugLog().log({
+      kind: 'guard-mode',
+      decision: remembered ? 'blocked' : 'allowed',
+      note: remembered ? 'ルート切替 (以前の判定を復元)' : 'ルート切替 (判定をやり直す)'
+    })
     if (changed) this.emitChange()
   }
 
   /**
    * ファイルが未ダウンロードらしいかを調べる。
-   * `stat` はダウンロードを起こさないので、読む前の足切りに使える。
+   * 一覧も `stat` もファイルのデータを読まないので、読む前の足切りに使える。
    */
   async isNotDownloaded(filePath: string): Promise<boolean> {
     if (this.alwaysRead) return false
 
     // 属性から作った一覧があれば、それが答え。stat すら要らない。
     if (this.placeholderIndex !== null) {
-      return this.placeholderIndex.has(normalizePath(filePath))
+      const hit = this.placeholderIndex.has(normalizePath(filePath))
+      this.countIndexCheck(hit)
+      return hit
     }
 
     if (process.platform !== 'win32') return false
     try {
+      const startedAt = Date.now()
       const stats = await fs.stat(filePath)
       const verdict = isLikelyPlaceholder(stats)
+      debugLog().log({
+        kind: 'guard-stat',
+        decision: verdict ? 'blocked' : 'allowed',
+        ms: Date.now() - startedAt,
+        target: filePath,
+        note: `size=${stats.size} blocks=${stats.blocks}`
+      })
       this.record(this.placeholders, {
         name: filePath.split(/[\\/]/).pop() ?? filePath,
         size: stats.size,
@@ -197,8 +253,8 @@ export class CloudGuard extends EventEmitter<CloudGuardEvents> {
         verdict
       })
       if (!verdict) return false
-      // 1 件でも確実に見つかれば、この場でクラウドモードへ入れてよい
-      this.enterCloudMode('placeholder')
+      // 一覧が無い状態で 1 件でも見つかったら、取りこぼしを恐れて全体を止める
+      this.block('placeholder')
       return true
     } catch {
       return false
@@ -207,7 +263,7 @@ export class CloudGuard extends EventEmitter<CloudGuardEvents> {
 
   /**
    * 読み込みにかかった時間を記録する。
-   * 遅さが続けばクラウドモードへ入り、速さが続けば解除する。
+   * 遅さが続けば遮断し、速さが続けば解除する。
    */
   recordRead(durationMs: number, kind: ReadKind = 'thumbnail'): void {
     this.record(this.reads, { kind, ms: Math.round(durationMs) })
@@ -216,7 +272,7 @@ export class CloudGuard extends EventEmitter<CloudGuardEvents> {
       this.consecutiveFast = 0
       this.consecutiveSlow++
       if (this.consecutiveSlow >= this.options.slowReadLimit) {
-        this.enterCloudMode('slow')
+        this.block('slow')
       }
       return
     }
@@ -225,26 +281,31 @@ export class CloudGuard extends EventEmitter<CloudGuardEvents> {
     this.consecutiveFast++
     // 明示的に落としたファイルが速く読めるようになったら自動で戻す
     if (
-      this.cloudMode &&
+      this.blocked &&
       this.reason !== 'manual' &&
       this.consecutiveFast >= this.options.fastRecoveryLimit
     ) {
-      this.cloudMode = false
-      this.reason = null
-      this.emitChange()
+      this.unblock('読み込みが速くなった')
     }
   }
 
-  /** ユーザー操作でクラウドモードを切り替える。 */
-  setCloudMode(on: boolean): void {
+  /** ユーザー操作で遮断を切り替える。 */
+  setBlocked(on: boolean): void {
     if (on) {
-      this.enterCloudMode('manual')
+      this.block('manual')
       return
     }
-    if (!this.cloudMode) return
-    this.cloudMode = false
+    this.release()
+  }
+
+  /** 案内も遮断も解く (一括ダウンロード後など)。 */
+  release(): void {
+    if (!this.cloudFolder && !this.blocked) return
+    this.cloudFolder = false
+    this.blocked = false
     this.reason = null
     this.consecutiveSlow = 0
+    debugLog().log({ kind: 'guard-mode', decision: 'allowed', note: '解除' })
     this.emitChange()
   }
 
@@ -254,11 +315,56 @@ export class CloudGuard extends EventEmitter<CloudGuardEvents> {
     if (buffer.length > SAMPLE_LIMIT) buffer.length = SAMPLE_LIMIT
   }
 
-  private enterCloudMode(reason: CloudModeReason): void {
-    if (this.cloudMode) return
-    this.cloudMode = true
+  /** 一覧による判定は件数が多いので、まとめて 1 行にする。 */
+  private countIndexCheck(hit: boolean): void {
+    if (hit) this.indexHits++
+    else this.indexMisses++
+    const total = this.indexHits + this.indexMisses
+    if (total % INDEX_LOG_INTERVAL !== 0) return
+    debugLog().log({
+      kind: 'guard-index',
+      decision: 'blocked',
+      note: `一覧で判定 ${total} 件: 未ダウンロード ${this.indexHits} / ローカル ${this.indexMisses}`
+    })
+  }
+
+  /** 未ダウンロードがあることだけを記録する (読み込みは止めない)。 */
+  private markCloudFolder(reason: CloudModeReason): void {
+    if (this.cloudFolder) return
+    this.cloudFolder = true
+    if (this.reason === null) this.reason = reason
+    debugLog().log({
+      kind: 'guard-mode',
+      decision: 'allowed',
+      note: `クラウドフォルダとして案内 (${reason})`
+    })
+    this.emitChange()
+  }
+
+  /** 自動読み込みを止める。 */
+  private block(reason: CloudModeReason): void {
+    if (this.blocked && this.reason === reason) return
+    const wasBlocked = this.blocked
+    this.blocked = true
+    this.cloudFolder = true
     this.reason = reason
     this.consecutiveFast = 0
+    debugLog().log({
+      kind: 'guard-mode',
+      decision: 'blocked',
+      note: `自動読み込みを停止 (${reason})`
+    })
+    if (!wasBlocked || this.reason !== reason) this.emitChange()
+  }
+
+  private unblock(note: string): void {
+    if (!this.blocked) return
+    this.blocked = false
+    this.consecutiveSlow = 0
+    // 一覧に未ダウンロードが残っていれば、案内は出したままにする
+    this.cloudFolder = (this.placeholderIndex?.size ?? 0) > 0
+    this.reason = this.cloudFolder ? 'placeholder' : null
+    debugLog().log({ kind: 'guard-mode', decision: 'allowed', note: `自動読み込みを再開 (${note})` })
     this.emitChange()
   }
 

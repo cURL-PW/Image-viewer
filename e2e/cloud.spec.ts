@@ -5,6 +5,8 @@ import {
   type ElectronApplication,
   type Page
 } from '@playwright/test'
+import fs from 'node:fs/promises'
+import path from 'node:path'
 import { createFixture, installDummyModel, removeFixture, type Fixture } from './fixtures'
 
 /**
@@ -59,7 +61,7 @@ async function cloudTileCount(): Promise<number> {
 test('読み込みが遅いとクラウドモードに入り、警告バーが出る', async () => {
   await expect(window.locator('.toolbar__count')).toHaveText('8 枚', { timeout: 20_000 })
   await expect(window.locator('.banner')).toBeVisible({ timeout: 20_000 })
-  await expect(window.locator('.banner__text')).toContainText('読み込まずにいます')
+  await expect(window.locator('.banner__text')).toContainText('止めています')
   await window.screenshot({ path: `${SHOTS}/08-cloud-banner.png` })
 })
 
@@ -118,7 +120,7 @@ test('設定画面の診断で、判定の内訳と読み込み時間を確認�
   await diagnostics.scrollIntoViewIfNeeded()
 
   // 判定のしきい値と現在の状態が読める (この spec では 0ms に下げて起動している)
-  await expect(diagnostics).toContainText('クラウドモード')
+  await expect(diagnostics).toContainText('クラウドフォルダ判定')
   await expect(diagnostics).toContainText('0 ms 超')
 
   // 読み込み時間が記録されている。走査の stat も計測対象で、
@@ -127,6 +129,31 @@ test('設定画面の診断で、判定の内訳と読み込み時間を確認�
   await expect(samples.first()).toBeVisible()
   await expect(samples.first()).toContainText('ms')
   await window.screenshot({ path: `${SHOTS}/10-diagnostics.png` })
+
+  await window.locator('.modal__footer .button--primary').click()
+  await expect(window.locator('.modal')).toHaveCount(0)
+})
+
+test('デバッグログにファイルへ触れた経路が残る', async () => {
+  await window.locator('.toolbar .button--icon', { hasText: '⚙' }).click()
+  await expect(window.locator('.modal__panel')).toBeVisible()
+
+  const diagnostics = window.locator('.diagnostics')
+  await expect(diagnostics.getByText('デバッグログを記録する')).toBeVisible()
+
+  // 「直近をコピー」はクリップボードへ入れる前にログを書き出す
+  await diagnostics.getByRole('button', { name: '直近をコピー' }).click()
+  await expect(diagnostics).toContainText('行をコピーしました')
+
+  const logFile = path.join(fixture.userData, 'logs', 'debug.log')
+  const content = await fs.readFile(logFile, 'utf8')
+  // 走査・サムネイル生成・門番の判定がそれぞれ記録されている
+  expect(content).toContain('walk-stat')
+  expect(content).toContain('thumb-gen')
+  expect(content).toContain('guard-mode')
+  // 1 行は「時刻 / 種別 / 判定 / 所要 / 対象」のタブ区切り
+  const line = content.split('\n').find((row) => row.includes('walk-stat')) ?? ''
+  expect(line.split('\t').length).toBeGreaterThanOrEqual(5)
 
   await window.locator('.modal__footer .button--primary').click()
   await expect(window.locator('.modal')).toHaveCount(0)

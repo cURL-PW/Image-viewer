@@ -3,6 +3,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import type { ImageRecord } from '@shared/types'
 import { NotDownloadedError, type CloudGuard } from './cloud-guard'
+import { debugLog } from './debug-log'
 import { imageDimensions, openImage } from './images'
 import { Semaphore } from './semaphore'
 
@@ -13,6 +14,8 @@ import { Semaphore } from './semaphore'
 const DEFAULT_CONCURRENCY = 2
 
 export interface DerivedImageOptions {
+  /** ログに出す名前 (thumb / display) */
+  label: string
   /** キャッシュの保存先 */
   cacheDir: string
   /** 長辺の上限 (px) */
@@ -61,15 +64,21 @@ export class DerivedImageCache {
 
   async get(image: ImageRecord, sourcePath: string, options: GetOptions = {}): Promise<Buffer> {
     const key = this.keyFor(image)
+    const label = this.options.label
 
     // キャッシュ済みならローカル読み込みだけで済むので、門番も同時実行の制限も通さない
     const cached = await this.readCache(key)
-    if (cached) return cached
+    if (cached) {
+      debugLog().log({ kind: `${label}-cache`, decision: 'cached', target: image.relPath })
+      return cached
+    }
 
     const existing = this.inFlight.get(key)
     if (existing) return existing
 
-    const task = this.generate(key, sourcePath, options).finally(() => this.inFlight.delete(key))
+    const task = this.generate(key, sourcePath, image.relPath, options).finally(() =>
+      this.inFlight.delete(key)
+    )
     this.inFlight.set(key, task)
     return task
   }
@@ -82,21 +91,47 @@ export class DerivedImageCache {
     }
   }
 
-  private async generate(key: string, sourcePath: string, options: GetOptions): Promise<Buffer> {
+  private async generate(
+    key: string,
+    sourcePath: string,
+    relPath: string,
+    options: GetOptions
+  ): Promise<Buffer> {
     const guard = this.options.guard
     const force = options.force === true
+    const label = this.options.label
+    const log = debugLog()
 
     if (!force && guard) {
-      if (!guard.allowAutoRead()) throw new NotDownloadedError()
-      // stat はダウンロードを起こさないので、読む前の足切りに使える
-      if (await guard.isNotDownloaded(sourcePath)) throw new NotDownloadedError()
+      if (!guard.allowAutoRead()) {
+        log.log({ kind: `${label}-gen`, decision: 'blocked', target: relPath, note: '遮断中' })
+        throw new NotDownloadedError()
+      }
+      // 一覧も stat もダウンロードを起こさないので、読む前の足切りに使える
+      if (await guard.isNotDownloaded(sourcePath)) {
+        log.log({
+          kind: `${label}-gen`,
+          decision: 'blocked',
+          target: relPath,
+          note: '未ダウンロード'
+        })
+        throw new NotDownloadedError()
+      }
     }
 
     const release = await this.semaphore.acquire()
     try {
-      // 順番待ちの間にクラウドモードへ入っていることがある。ここで弾けば、
+      // 順番待ちの間に遮断へ入っていることがある。ここで弾けば、
       // 画面いっぱいに積まれたサムネイル要求も読み込まずに順次片付く。
-      if (!force && guard && !guard.allowAutoRead()) throw new NotDownloadedError()
+      if (!force && guard && !guard.allowAutoRead()) {
+        log.log({
+          kind: `${label}-gen`,
+          decision: 'blocked',
+          target: relPath,
+          note: '順番待ちの間に遮断'
+        })
+        throw new NotDownloadedError()
+      }
 
       const startedAt = Date.now()
       // openImage が形式ごとの差 (HEIC の WASM 復号や EXIF の向き) を吸収する
@@ -108,7 +143,15 @@ export class DerivedImageCache {
         })
         .webp({ quality: this.options.quality })
         .toBuffer()
-      guard?.recordRead(Date.now() - startedAt)
+      const elapsed = Date.now() - startedAt
+      guard?.recordRead(elapsed)
+      // 実際に画素を読んだ地点。ここが数秒なら、その 1 枚を落としていたことになる
+      log.log({
+        kind: `${label}-gen`,
+        decision: force ? 'forced' : 'allowed',
+        ms: elapsed,
+        target: relPath
+      })
 
       await this.writeCache(key, buffer)
       return buffer
@@ -129,7 +172,15 @@ export class DerivedImageCache {
 
   /** 画像の実サイズを取得する (単画像ビューの情報表示用)。 */
   async dimensions(sourcePath: string): Promise<{ width: number; height: number } | null> {
-    return imageDimensions(sourcePath)
+    const startedAt = Date.now()
+    const result = await imageDimensions(sourcePath)
+    debugLog().log({
+      kind: 'dimensions',
+      decision: 'allowed',
+      ms: Date.now() - startedAt,
+      target: sourcePath
+    })
+    return result
   }
 
   async clear(): Promise<void> {

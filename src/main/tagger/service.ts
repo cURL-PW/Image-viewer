@@ -3,6 +3,7 @@ import { app, utilityProcess, type UtilityProcess } from 'electron'
 import { IPC, type ImageRecord, type ScanCommand, type ScanProgress } from '@shared/types'
 import { broadcast } from '../context'
 import type { CloudGuard } from '../cloud-guard'
+import { debugLog } from '../debug-log'
 import type { LibraryDb } from '../db'
 import type { DerivedImageCache } from '../image-cache'
 import type { Library } from '../library'
@@ -34,7 +35,12 @@ export class TaggerService {
   private disposed = false
 
   private queue: ImageRecord[] = []
-  private currentJob: { id: number; record: ImageRecord; retries: number } | null = null
+  private currentJob: {
+    id: number
+    record: ImageRecord
+    retries: number
+    startedAt: number
+  } | null = null
   private nextJobId = 1
 
   private paused = false
@@ -50,7 +56,8 @@ export class TaggerService {
     state: 'idle',
     modelProgress: null,
     message: null,
-    cloudMode: false,
+    cloudFolder: false,
+    cloudBlocked: false,
     cloudReason: null,
     notDownloaded: 0,
     download: null
@@ -186,14 +193,28 @@ export class TaggerService {
         this.broadcastProgress()
 
         const filePath = path.resolve(rootPath, record.relPath)
+        const startedAt = Date.now()
         try {
           // force で門番を素通りし、実体を落としてサムネイルまで作る
           await this.thumbs.get(record, filePath, { force: true })
           // 落ちてきたので、未ダウンロード一覧から外してタグ付け対象へ戻す
           this.guard.markDownloaded(filePath)
           this.db.clearScanError(id, PLACEHOLDER_MESSAGE)
+          debugLog().log({
+            kind: 'download-file',
+            decision: 'forced',
+            ms: Date.now() - startedAt,
+            target: record.relPath
+          })
         } catch (error) {
           console.warn('[tagger] ダウンロードに失敗', record.relPath, error)
+          debugLog().log({
+            kind: 'download-file',
+            decision: 'skipped',
+            ms: Date.now() - startedAt,
+            target: record.relPath,
+            note: error instanceof Error ? error.message : String(error)
+          })
         }
       }
     }
@@ -203,9 +224,9 @@ export class TaggerService {
     } finally {
       if (this.downloadJob === job) this.downloadJob = null
       this.progress = { ...this.progress, download: null }
-      // ユーザーが明示的に落としたフォルダなので、クラウドモードを解いてタグ付けへ進む。
+      // ユーザーが明示的に落としたフォルダなので、遮断を解いてタグ付けへ進む。
       // まだ未ダウンロードのものが残っていれば、門番がまた止めてくれる。
-      if (!job.cancelled) this.guard.setCloudMode(false)
+      if (!job.cancelled) this.guard.release()
       this.refreshProgress()
       this.broadcastProgress(true)
       // 落としたものをタグ付けし直す
@@ -246,6 +267,9 @@ export class TaggerService {
     // クラウド同期フォルダとみなしている間は、勝手にダウンロードを起こさない。
     // 「まとめてダウンロードしてタグ付け」か「常に読み込む」で明示的に再開する。
     if (!this.guard.allowAutoRead()) {
+      if (this.progress.state !== 'paused') {
+        debugLog().log({ kind: 'tag-pump', decision: 'blocked', note: '遮断中のためタグ付けを停止' })
+      }
       this.setState('paused')
       return
     }
@@ -286,7 +310,7 @@ export class TaggerService {
 
     // await をまたぐ前に処理枠を押さえる。ここで currentJob を空のままにすると
     // 次の pump() が同時に走り、2 件が並行してワーカーへ流れてしまう。
-    const job = { id: this.nextJobId++, record, retries: 0 }
+    const job = { id: this.nextJobId++, record, retries: 0, startedAt: Date.now() }
     this.currentJob = job
 
     const filePath = path.resolve(rootPath, record.relPath)
@@ -296,6 +320,7 @@ export class TaggerService {
     // scan_error に記録しておけば「失敗した画像を再試行」でやり直せる。
     if (await this.guard.isNotDownloaded(filePath)) {
       this.currentJob = null
+      debugLog().log({ kind: 'tag-skip', decision: 'blocked', target: record.relPath })
       this.db.setScanError(record.id, PLACEHOLDER_MESSAGE)
       // 未ダウンロードが数万件あることもあるので、進捗の再計算は間引く
       // (COUNT を 1 件ごとに走らせると、飛ばすだけで時間がかかってしまう)
@@ -308,6 +333,9 @@ export class TaggerService {
     this.progress = { ...this.progress, current: record.fileName }
     this.setState('running')
 
+    // ワーカーも同じファイルを開いて読む。ここが数秒なら、推論ではなく
+    // ダウンロード待ちの可能性がある
+    job.startedAt = Date.now()
     const settings = this.settings.get()
     this.worker.postMessage({
       type: 'infer',
@@ -399,6 +427,12 @@ export class TaggerService {
         const job = this.currentJob
         if (!job || job.id !== message.jobId) break
         this.currentJob = null
+        debugLog().log({
+          kind: 'infer',
+          decision: 'allowed',
+          ms: Date.now() - job.startedAt,
+          target: job.record.relPath
+        })
         this.db.saveTags(job.record.id, this.settings.get().modelId, message.tags)
         if (message.width > 0 && message.height > 0) {
           this.db.setDimensions(job.record.id, message.width, message.height)
@@ -413,6 +447,13 @@ export class TaggerService {
         const job = this.currentJob
         if (!job || job.id !== message.jobId) break
         this.currentJob = null
+        debugLog().log({
+          kind: 'infer',
+          decision: 'skipped',
+          ms: Date.now() - job.startedAt,
+          target: job.record.relPath,
+          note: message.message
+        })
         this.db.setScanError(job.record.id, message.message)
         this.refreshProgress()
         this.pump()
@@ -421,6 +462,7 @@ export class TaggerService {
 
       case 'log':
         console.info('[tagger]', message.message)
+        debugLog().log({ kind: 'worker-log', note: message.message })
         break
     }
   }
@@ -469,7 +511,8 @@ export class TaggerService {
         done: 0,
         total: 0,
         notDownloaded: 0,
-        cloudMode: cloud.cloudMode,
+        cloudFolder: cloud.cloudFolder,
+        cloudBlocked: cloud.blocked,
         cloudReason: cloud.reason
       }
       this.broadcastProgress()
@@ -481,7 +524,8 @@ export class TaggerService {
       done: counts.total - counts.pending,
       total: counts.total,
       notDownloaded: this.db.countScanErrors(rootId, PLACEHOLDER_MESSAGE),
-      cloudMode: cloud.cloudMode,
+      cloudFolder: cloud.cloudFolder,
+      cloudBlocked: cloud.blocked,
       cloudReason: cloud.reason
     }
     this.broadcastProgress()

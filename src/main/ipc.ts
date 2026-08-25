@@ -1,8 +1,10 @@
+import fs from 'node:fs/promises'
 import path from 'node:path'
 import { BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import {
   IPC,
   type AppSettings,
+  type DebugLogInfo,
   type FolderNode,
   type ImageQuery,
   type ImageRecord,
@@ -129,6 +131,36 @@ export function registerIpcHandlers(ctx: AppContext): void {
 
   ipcMain.handle(IPC.getDiagnostics, (): CloudDiagnostics => ctx.guard.diagnostics)
 
+  ipcMain.handle(IPC.getLogInfo, async (): Promise<DebugLogInfo> => {
+    let size = 0
+    try {
+      size = (await fs.stat(ctx.log.filePath)).size
+    } catch {
+      // まだ 1 行も書かれていない
+    }
+    return { enabled: ctx.log.isEnabled, path: ctx.log.filePath, size }
+  })
+
+  // 「直近をコピー」。renderer 側でクリップボードへ入れて、そのまま貼って共有できる
+  ipcMain.handle(IPC.readLogTail, (_event, lines: number): Promise<string> => {
+    const count = Math.min(Math.max(Number(lines) || 300, 1), 5000)
+    return ctx.log.tail(count)
+  })
+
+  ipcMain.handle(IPC.openLogFolder, async (): Promise<void> => {
+    // ファイルがまだ無いとエクスプローラが開かないので、空でも作っておく
+    await ctx.log.flush()
+    try {
+      await fs.mkdir(path.dirname(ctx.log.filePath), { recursive: true })
+      await fs.appendFile(ctx.log.filePath, '')
+    } catch {
+      // 作れなくてもフォルダは開いてみる
+    }
+    shell.showItemInFolder(ctx.log.filePath)
+  })
+
+  ipcMain.handle(IPC.clearLog, (): Promise<void> => ctx.log.clear())
+
   ipcMain.handle(IPC.getSettings, (): AppSettings => ctx.settings.get())
 
   ipcMain.handle(IPC.setSettings, async (_event, patch: Partial<AppSettings>): Promise<AppSettings> => {
@@ -139,6 +171,9 @@ export function registerIpcHandlers(ctx: AppContext): void {
     }
     if (changed.includes('alwaysReadCloudFiles')) {
       ctx.guard.setAlwaysRead(settings.alwaysReadCloudFiles)
+    }
+    if (changed.includes('debugLog')) {
+      ctx.log.setEnabled(settings.debugLog)
     }
     if (
       changed.includes('modelId') ||

@@ -3,6 +3,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import chokidar, { type FSWatcher } from 'chokidar'
 import { SUPPORTED_EXTENSIONS, type LibraryChange } from '@shared/types'
+import { debugLog } from './debug-log'
 import type { ImageUpsert, LibraryDb } from './db'
 
 const EXTENSIONS = new Set<string>(SUPPORTED_EXTENSIONS)
@@ -68,11 +69,19 @@ export async function* walkImages(
   while (stack.length > 0) {
     const dir = stack.pop() as string
     let entries: import('node:fs').Dirent[]
+    const readStartedAt = Date.now()
     try {
       entries = await fs.readdir(dir, { withFileTypes: true })
     } catch {
       continue // 権限がない等のディレクトリはスキップ
     }
+    debugLog().log({
+      kind: 'walk-readdir',
+      decision: 'allowed',
+      ms: Date.now() - readStartedAt,
+      target: dir,
+      note: `${entries.length} 件`
+    })
 
     for (const entry of entries) {
       if (entry.name.startsWith('.')) continue
@@ -90,12 +99,20 @@ export async function* walkImages(
       // readdir はファイルを開かないので安全だが、stat は Windows で実体を取りに行く。
       // 止められている間は寸法不明のまま登録し、必要になった時点で埋める。
       if (gate && !gate.allow()) {
+        debugLog().log({ kind: 'walk-stat', decision: 'blocked', target: relPath })
         batch.push({ fullPath, relPath, dirPath, fileName, mtime: 0, size: 0 })
       } else {
         try {
           const startedAt = Date.now()
           const stats = await fs.stat(fullPath)
-          gate?.record(Date.now() - startedAt)
+          const elapsed = Date.now() - startedAt
+          gate?.record(elapsed)
+          debugLog().log({
+            kind: 'walk-stat',
+            decision: 'allowed',
+            ms: elapsed,
+            target: relPath
+          })
           batch.push({
             fullPath,
             relPath,
@@ -265,10 +282,24 @@ export class Library extends EventEmitter<LibraryEvents> {
       ignored: (target: string) => target !== rootPath && path.basename(target).startsWith('.')
     })
 
-    watcher.on('add', (file) => this.queueUpsert(file))
-    watcher.on('change', (file) => this.queueUpsert(file))
-    watcher.on('unlink', (file) => this.queueRemove(file))
-    watcher.on('unlinkDir', (dir) => this.queueRemoveDir(dir))
+    // 監視イベントもすべて記録する。アプリが読んでいないのに change が大量に出るなら、
+    // ダウンロードを起こしているのはアプリの外 (同期クライアント自身) ということになる。
+    watcher.on('add', (file) => {
+      debugLog().log({ kind: 'watch-add', target: file })
+      this.queueUpsert(file)
+    })
+    watcher.on('change', (file) => {
+      debugLog().log({ kind: 'watch-change', target: file })
+      this.queueUpsert(file)
+    })
+    watcher.on('unlink', (file) => {
+      debugLog().log({ kind: 'watch-unlink', target: file })
+      this.queueRemove(file)
+    })
+    watcher.on('unlinkDir', (dir) => {
+      debugLog().log({ kind: 'watch-unlinkdir', target: dir })
+      this.queueRemoveDir(dir)
+    })
     watcher.on('addDir', () => this.scheduleFlush())
     watcher.on('error', (error) => console.error('[watcher]', error))
 
@@ -323,13 +354,16 @@ export class Library extends EventEmitter<LibraryEvents> {
 
       // 走査と同じ理由で、止められている間は stat しない
       if (this.gate && !this.gate.allow()) {
+        debugLog().log({ kind: 'flush-stat', decision: 'blocked', target: relPath })
         files.push({ relPath, dirPath, fileName, mtime: 0, size: 0 })
         continue
       }
       try {
         const startedAt = Date.now()
         const stats = await fs.stat(fullPath)
-        this.gate?.record(Date.now() - startedAt)
+        const elapsed = Date.now() - startedAt
+        this.gate?.record(elapsed)
+        debugLog().log({ kind: 'flush-stat', decision: 'allowed', ms: elapsed, target: relPath })
         files.push({
           relPath,
           dirPath,

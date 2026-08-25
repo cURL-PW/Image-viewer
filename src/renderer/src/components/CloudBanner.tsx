@@ -22,7 +22,7 @@ export default function CloudBanner(): React.JSX.Element | null {
   const download = scan.download
   const downloading = download !== null
 
-  if (!scan.cloudMode && !downloading) return null
+  if (!scan.cloudFolder && !scan.cloudBlocked && !downloading) return null
 
   if (downloading) {
     const percent = download.total > 0 ? Math.round((download.done / download.total) * 100) : 0
@@ -47,7 +47,9 @@ export default function CloudBanner(): React.JSX.Element | null {
     <div className="banner">
       <span className="banner__text">
         {REASON_TEXT[scan.cloudReason ?? 'slow'] ?? REASON_TEXT.slow}。
-        クラウド同期フォルダとみなして、未ダウンロードの写真は読み込まずにいます
+        {scan.cloudBlocked
+          ? '自動の読み込み (サムネイル・タグ付け) を止めています'
+          : '未ダウンロードの写真だけを読み込まずにいます'}
         {scan.notDownloaded > 0 ? ` (${scan.notDownloaded.toLocaleString()} 枚)` : ''}。
         写真を開けばその 1 枚はダウンロードされます。
       </span>

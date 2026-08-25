@@ -796,3 +796,19 @@ select,
 .diagnostics__slow {
   color: var(--danger);
 }
+
+/* デバッグログの操作 (記録の切り替え・フォルダを開く・直近をコピー) */
+.field__check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 4px 0;
+  cursor: pointer;
+}
+
+.diagnostics__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}

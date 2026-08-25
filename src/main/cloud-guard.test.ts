@@ -32,17 +32,20 @@ describe('CloudGuard の回路遮断器', () => {
   it('初期状態では自動読み込みを許可する', () => {
     const guard = new CloudGuard(OPTIONS)
     expect(guard.allowAutoRead()).toBe(true)
-    expect(guard.isCloudMode).toBe(false)
+    expect(guard.isBlocked).toBe(false)
+    expect(guard.isCloudFolder).toBe(false)
   })
 
-  it('遅い読み込みが続くとクラウドモードへ入る', () => {
+  it('遅い読み込みが続くと自動読み込みを止める', () => {
     const guard = new CloudGuard(OPTIONS)
     guard.recordRead(5000)
     // 1 回だけではまだ止めない (たまたま遅かっただけかもしれない)
     expect(guard.allowAutoRead()).toBe(true)
 
     guard.recordRead(5000)
-    expect(guard.isCloudMode).toBe(true)
+    expect(guard.isBlocked).toBe(true)
+    // 案内も出す
+    expect(guard.isCloudFolder).toBe(true)
     expect(guard.status.reason).toBe('slow')
     expect(guard.allowAutoRead()).toBe(false)
   })
@@ -52,35 +55,36 @@ describe('CloudGuard の回路遮断器', () => {
     guard.recordRead(5000)
     guard.recordRead(10)
     guard.recordRead(5000)
-    expect(guard.isCloudMode).toBe(false)
+    expect(guard.isBlocked).toBe(false)
   })
 
-  it('速い読み込みが続けばクラウドモードを自動で解除する', () => {
+  it('速い読み込みが続けば自動で解除する', () => {
     const guard = new CloudGuard(OPTIONS)
     guard.recordRead(5000)
     guard.recordRead(5000)
-    expect(guard.isCloudMode).toBe(true)
+    expect(guard.isBlocked).toBe(true)
 
     // 明示的に落としたファイルが速く読めるようになった
     guard.recordRead(10)
     guard.recordRead(10)
-    expect(guard.isCloudMode).toBe(true)
+    expect(guard.isBlocked).toBe(true)
     guard.recordRead(10)
-    expect(guard.isCloudMode).toBe(false)
+    expect(guard.isBlocked).toBe(false)
+    expect(guard.isCloudFolder).toBe(false)
   })
 
-  it('手動で入れたクラウドモードは速い読み込みでは解除しない', () => {
+  it('手動で止めたものは速い読み込みでは解除しない', () => {
     const guard = new CloudGuard(OPTIONS)
-    guard.setCloudMode(true)
+    guard.setBlocked(true)
     expect(guard.status.reason).toBe('manual')
     for (let i = 0; i < 10; i++) guard.recordRead(1)
-    expect(guard.isCloudMode).toBe(true)
+    expect(guard.isBlocked).toBe(true)
 
-    guard.setCloudMode(false)
-    expect(guard.isCloudMode).toBe(false)
+    guard.setBlocked(false)
+    expect(guard.isBlocked).toBe(false)
   })
 
-  it('「常に読み込む」を選べばクラウドモードでも自動読み込みを許可する', () => {
+  it('「常に読み込む」を選べば止まっていても自動読み込みを許可する', () => {
     const guard = new CloudGuard(OPTIONS)
     guard.recordRead(5000)
     guard.recordRead(5000)
@@ -88,19 +92,28 @@ describe('CloudGuard の回路遮断器', () => {
 
     guard.setAlwaysRead(true)
     expect(guard.allowAutoRead()).toBe(true)
-    // モード自体は残るので、UI では状況を伝えられる
-    expect(guard.isCloudMode).toBe(true)
+    // 状態自体は残るので、UI では状況を伝えられる
+    expect(guard.isBlocked).toBe(true)
   })
 
   it('ルート切り替えで判定をやり直す', () => {
     const guard = new CloudGuard(OPTIONS)
     guard.recordRead(5000)
     guard.recordRead(5000)
-    expect(guard.isCloudMode).toBe(true)
+    expect(guard.isBlocked).toBe(true)
 
     guard.reset()
-    expect(guard.isCloudMode).toBe(false)
+    expect(guard.isBlocked).toBe(false)
+    expect(guard.isCloudFolder).toBe(false)
     expect(guard.allowAutoRead()).toBe(true)
+  })
+
+  it('記憶を復元したときは最初から止めておく', () => {
+    const guard = new CloudGuard(OPTIONS)
+    guard.reset(true)
+    expect(guard.isBlocked).toBe(true)
+    expect(guard.isCloudFolder).toBe(true)
+    expect(guard.status.reason).toBe('remembered')
   })
 
   it('状態が変わったときだけ change を通知する', () => {
@@ -114,7 +127,7 @@ describe('CloudGuard の回路遮断器', () => {
     guard.recordRead(5000)
     expect(listener).toHaveBeenCalledTimes(1)
 
-    // すでにクラウドモードなので追加の通知は出ない
+    // すでに止まっているので追加の通知は出ない
     guard.recordRead(5000)
     expect(listener).toHaveBeenCalledTimes(1)
   })
@@ -143,29 +156,61 @@ describe('CloudGuard の正確な一覧 (ファイル属性ベース)', () => {
     const guard = new CloudGuard(OPTIONS)
     guard.setPlaceholderIndex(index())
 
-    // 未ダウンロードが居るのでクラウドモードには入る (UI で状況を伝えるため)
-    expect(guard.isCloudMode).toBe(true)
+    // 未ダウンロードが居るので案内は出す
+    expect(guard.isCloudFolder).toBe(true)
     // ただしローカルの写真は従来どおり扱えるよう、自動読み込みは止めない
     expect(guard.allowAutoRead()).toBe(true)
     expect(guard.hasExactIndex).toBe(true)
   })
 
-  it('落としたファイルは一覧から外れ、全部落ちればモードが解ける', async () => {
+  it('一覧があっても、遅い読み込みが続けば必ず止まる', () => {
+    // 回帰テスト: 一覧が作れただけで遮断器を無効化してしまうと、
+    // パスの照合が外れたときにライブラリ全体を読みに行ってしまう
+    const guard = new CloudGuard(OPTIONS)
+    guard.setPlaceholderIndex(index())
+    expect(guard.allowAutoRead()).toBe(true)
+
+    guard.recordRead(5000)
+    guard.recordRead(5000)
+    expect(guard.allowAutoRead()).toBe(false)
+    expect(guard.isBlocked).toBe(true)
+  })
+
+  it('照合が総外れ (一覧が空) でも遮断器は効く', () => {
+    const guard = new CloudGuard(OPTIONS)
+    guard.setPlaceholderIndex(new Set())
+    guard.recordRead(5000)
+    guard.recordRead(5000)
+    expect(guard.allowAutoRead()).toBe(false)
+  })
+
+  it('案内と遮断は別々の状態として持つ', () => {
+    const guard = new CloudGuard(OPTIONS)
+    guard.setPlaceholderIndex(index())
+    // 案内だけ出ていて、読み込みは止まっていない
+    expect(guard.status).toEqual({ cloudFolder: true, blocked: false, reason: 'placeholder' })
+
+    guard.recordRead(5000)
+    guard.recordRead(5000)
+    expect(guard.status).toEqual({ cloudFolder: true, blocked: true, reason: 'slow' })
+  })
+
+  it('落としたファイルは一覧から外れ、全部落ちれば案内も消える', async () => {
     const guard = new CloudGuard(OPTIONS)
     guard.setPlaceholderIndex(index())
 
     guard.markDownloaded('C:\\Photos\\a.heic')
     expect(await guard.isNotDownloaded('C:\\Photos\\a.heic')).toBe(false)
-    expect(guard.isCloudMode).toBe(true)
+    expect(guard.isCloudFolder).toBe(true)
 
     guard.markDownloaded('C:\\Photos\\b.heic')
-    expect(guard.isCloudMode).toBe(false)
+    expect(guard.isCloudFolder).toBe(false)
   })
 
-  it('一覧が空 (= 全部ローカル) ならクラウドモードに入らない', () => {
+  it('一覧が空 (= 全部ローカル) なら案内を出さない', () => {
     const guard = new CloudGuard(OPTIONS)
     guard.setPlaceholderIndex(new Set())
-    expect(guard.isCloudMode).toBe(false)
+    expect(guard.isCloudFolder).toBe(false)
     expect(guard.allowAutoRead()).toBe(true)
   })
 
@@ -177,6 +222,19 @@ describe('CloudGuard の正確な一覧 (ファイル属性ベース)', () => {
     guard.recordRead(5000)
     guard.recordRead(5000)
     expect(guard.allowAutoRead()).toBe(false)
+  })
+
+  it('遮断が解けても、一覧に残っていれば案内は出したままにする', () => {
+    const guard = new CloudGuard(OPTIONS)
+    guard.setPlaceholderIndex(index())
+    guard.recordRead(5000)
+    guard.recordRead(5000)
+    expect(guard.isBlocked).toBe(true)
+
+    for (let i = 0; i < 3; i++) guard.recordRead(10)
+    expect(guard.isBlocked).toBe(false)
+    expect(guard.isCloudFolder).toBe(true)
+    expect(guard.status.reason).toBe('placeholder')
   })
 
   it('ルートを切り替えたら一覧も捨てる', () => {

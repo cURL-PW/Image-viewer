@@ -29,4 +29,10 @@ describe('normalizeSettings', () => {
   it('ページ送りのクリック領域は画面の半分を超えない', () => {
     expect(normalizeSettings({ edgeClickRatio: 0.9 }).edgeClickRatio).toBe(0.45)
   })
+
+  it('デバッグログは既定で有効、明示的に false のときだけ無効', () => {
+    expect(normalizeSettings({}).debugLog).toBe(true)
+    expect(normalizeSettings({ debugLog: undefined }).debugLog).toBe(true)
+    expect(normalizeSettings({ debugLog: false }).debugLog).toBe(false)
+  })
 })

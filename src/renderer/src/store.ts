@@ -84,7 +84,8 @@ const initialScan: ScanProgress = {
   state: 'idle',
   modelProgress: null,
   message: null,
-  cloudMode: false,
+  cloudFolder: false,
+  cloudBlocked: false,
   cloudReason: null,
   notDownloaded: 0,
   download: null
@@ -187,7 +188,7 @@ export const useStore = create<State & Actions>((set, get) => {
         // 一括ダウンロードが終わった / クラウドモードが解けたときは、
         // 雲タイルのまま止まっているサムネイルを読み直す
         const downloadFinished = previous.download !== null && scanProgress.download === null
-        const cloudCleared = previous.cloudMode && !scanProgress.cloudMode
+        const cloudCleared = previous.cloudBlocked && !scanProgress.cloudBlocked
         set((state) => ({
           scan: scanProgress,
           thumbEpoch: downloadFinished || cloudCleared ? state.thumbEpoch + 1 : state.thumbEpoch

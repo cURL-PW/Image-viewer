@@ -108,7 +108,10 @@ export interface PlaceholderSample {
 
 /** 設定画面に出す診断情報。実機で何が起きているかを手作業なしで確認するためのもの */
 export interface CloudDiagnostics {
-  cloudMode: boolean
+  /** 未ダウンロードの写真があるフォルダとみなしているか (案内用) */
+  cloudFolder: boolean
+  /** 自動読み込みを実際に止めているか */
+  blocked: boolean
   reason: 'placeholder' | 'slow' | 'manual' | 'remembered' | null
   alwaysRead: boolean
   /** ファイル属性から作った正確な一覧を使えているか */
@@ -121,6 +124,14 @@ export interface CloudDiagnostics {
   reads: ReadSample[]
   /** 直近のプレースホルダ判定 (新しい順) */
   placeholders: PlaceholderSample[]
+}
+
+/** デバッグログの状態 (設定画面に出す) */
+export interface DebugLogInfo {
+  enabled: boolean
+  path: string
+  /** 書き出し済みのバイト数。まだ無ければ 0 */
+  size: number
 }
 
 export interface DownloadProgress {
@@ -142,8 +153,10 @@ export interface ScanProgress {
   /** モデル準備 (ダウンロード) の進捗 0-1。準備中以外は null */
   modelProgress: number | null
   message: string | null
-  /** クラウド同期フォルダとみなして自動読み込みを止めているか */
-  cloudMode: boolean
+  /** 未ダウンロードの写真があるフォルダとみなしているか (案内を出す条件) */
+  cloudFolder: boolean
+  /** 自動読み込みを実際に止めているか */
+  cloudBlocked: boolean
   /** なぜクラウドモードに入ったか */
   cloudReason: 'placeholder' | 'slow' | 'manual' | 'remembered' | null
   /** 未ダウンロードとして飛ばした枚数 */
@@ -176,6 +189,8 @@ export interface AppSettings {
   autoScan: boolean
   /** クラウド同期フォルダの未ダウンロード写真も自動で読み込む (既定は読み込まない) */
   alwaysReadCloudFiles: boolean
+  /** ファイルに触れた操作をログへ記録する (原因調査用。既定で有効) */
+  debugLog: boolean
   thumbnailSize: number
   /** 画像左右のページ送りクリック領域の比率 (0-0.5) */
   edgeClickRatio: number
@@ -190,6 +205,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   provider: 'auto',
   autoScan: true,
   alwaysReadCloudFiles: false,
+  debugLog: true,
   thumbnailSize: 256,
   edgeClickRatio: 0.25,
   sortKey: 'path',
@@ -219,6 +235,10 @@ export const IPC = {
   downloadFolder: 'library:downloadFolder',
   cancelDownload: 'library:cancelDownload',
   getDiagnostics: 'cloud:getDiagnostics',
+  getLogInfo: 'log:getInfo',
+  readLogTail: 'log:readTail',
+  openLogFolder: 'log:openFolder',
+  clearLog: 'log:clear',
   getSettings: 'settings:get',
   setSettings: 'settings:set',
   // main → renderer

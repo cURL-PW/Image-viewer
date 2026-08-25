@@ -10,6 +10,7 @@ import { createResolver, registerImageProtocolHandlers, registerImageSchemes } f
 import { LAST_ROOT_KEY, SettingsStore } from './settings'
 import { TaggerService } from './tagger/service'
 import { CloudGuard, DEFAULT_CLOUD_GUARD_OPTIONS } from './cloud-guard'
+import { initDebugLog } from './debug-log'
 import { DerivedImageCache } from './image-cache'
 
 /**
@@ -61,6 +62,14 @@ function createContext(): AppContext {
   const db = new LibraryDb(path.join(userData, 'library.db'))
   const settings = new SettingsStore(db)
 
+  // 何がファイルを触ってダウンロードを起こしているのかを実測で追うための記録。
+  // 原因が分かるまでは既定で有効。設定か IMAGE_VIEWER_DEBUG_LOG=0 で止められる。
+  const log = initDebugLog(
+    path.join(userData, 'logs', 'debug.log'),
+    settings.get().debugLog && process.env.IMAGE_VIEWER_DEBUG_LOG !== '0'
+  )
+  log.log({ kind: 'app-start', note: `${process.platform} electron ${process.versions.electron}` })
+
   // クラウド同期フォルダで勝手にダウンロードが走らないようにする門番。
   // しきい値は E2E から下げられるようにしておく。
   const slowReadMs = Number(process.env.IMAGE_VIEWER_SLOW_READ_MS)
@@ -78,6 +87,7 @@ function createContext(): AppContext {
   })
 
   const thumbs = new DerivedImageCache({
+    label: 'thumb',
     cacheDir: path.join(userData, 'thumbnails'),
     size: settings.get().thumbnailSize,
     quality: 80,
@@ -85,6 +95,7 @@ function createContext(): AppContext {
   })
   // HEIC は Chromium が表示できないので、元の解像度を保ったまま WebP へ変換して配信する
   const display = new DerivedImageCache({
+    label: 'display',
     cacheDir: path.join(userData, 'display'),
     size: DISPLAY_MAX_EDGE,
     quality: 88,
@@ -108,10 +119,10 @@ function createContext(): AppContext {
   guard.on('change', (status) => {
     const rootPath = library.currentRootPath
     if (!rootPath || status.reason === 'remembered') return
-    db.setSetting(cloudModeKey(rootPath), status.cloudMode ? '1' : '')
+    db.setSetting(cloudModeKey(rootPath), status.cloudFolder ? '1' : '')
   })
 
-  return { db, library, thumbs, display, settings, guard, tagger, resolve }
+  return { db, library, thumbs, display, settings, guard, tagger, resolve, log }
 }
 
 function createWindow(): BrowserWindow {
@@ -239,6 +250,8 @@ app.on('before-quit', (event) => {
     try {
       await current?.tagger.dispose()
       await current?.library.stop()
+      // 落ちる直前の行まで残す
+      await current?.log.dispose()
       current?.db.close()
     } catch (error) {
       console.error('[shutdown]', error)

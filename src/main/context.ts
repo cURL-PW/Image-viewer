@@ -6,6 +6,8 @@ import type { Library } from './library'
 import type { ResolvedImage } from './protocol'
 import type { SettingsStore } from './settings'
 import type { CloudGuard } from './cloud-guard'
+import { debugLog } from './debug-log'
+import type { DebugLog } from './debug-log'
 import type { DerivedImageCache } from './image-cache'
 import type { TaggerService } from './tagger/service'
 
@@ -18,6 +20,8 @@ export interface AppContext {
   settings: SettingsStore
   guard: CloudGuard
   tagger: TaggerService
+  /** ファイルに触れた操作の記録 (設定画面から参照・停止できる) */
+  log: DebugLog
   resolve: (id: number) => ResolvedImage | null
 }
 
@@ -35,6 +39,12 @@ export function cloudModeKey(rootPath: string): string {
  */
 export async function openRoot(ctx: AppContext, rootPath: string): Promise<number> {
   const remembered = ctx.db.getSetting(cloudModeKey(rootPath)) === '1'
+  debugLog().log({
+    kind: 'open-root',
+    decision: remembered ? 'blocked' : 'allowed',
+    target: rootPath,
+    note: remembered ? '前回クラウドと判定したフォルダ' : ''
+  })
   ctx.guard.reset(remembered)
 
   const rootId = await ctx.library.setRoot(rootPath)
