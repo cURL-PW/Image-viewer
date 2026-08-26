@@ -151,6 +151,11 @@ test('デバッグログにファイルへ触れた経路が残る', async () =>
   expect(content).toContain('walk-stat')
   expect(content).toContain('thumb-gen')
   expect(content).toContain('guard-mode')
+  // 走査が終わったのか死んだのかが分かること (実機で判別できずに困った)
+  expect(content).toContain('walk-start')
+  expect(content).toContain('walk-done')
+  // 自覚のない fs 呼び出しを数えている
+  expect(content).toContain('fs-probe')
   // 1 行は「時刻 / 種別 / 判定 / 所要 / 対象」のタブ区切り
   const line = content.split('\n').find((row) => row.includes('walk-stat')) ?? ''
   expect(line.split('\t').length).toBeGreaterThanOrEqual(5)

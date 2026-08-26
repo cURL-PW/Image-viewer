@@ -11,6 +11,7 @@ import { LAST_ROOT_KEY, SettingsStore } from './settings'
 import { TaggerService } from './tagger/service'
 import { CloudGuard, DEFAULT_CLOUD_GUARD_OPTIONS } from './cloud-guard'
 import { initDebugLog } from './debug-log'
+import { installFsProbe } from './fs-probe'
 import { DerivedImageCache } from './image-cache'
 
 /**
@@ -69,6 +70,9 @@ function createContext(): AppContext {
     settings.get().debugLog && process.env.IMAGE_VIEWER_DEBUG_LOG !== '0'
   )
   log.log({ kind: 'app-start', note: `${process.platform} electron ${process.versions.electron}` })
+  // 「アプリは読んでいないはずなのにダウンロードが続く」を確かめるための計測。
+  // 自覚のない経路 (依存ライブラリの監視など) がファイルを開いていないかを数える
+  installFsProbe()
 
   // クラウド同期フォルダで勝手にダウンロードが走らないようにする門番。
   // しきい値は E2E から下げられるようにしておく。
@@ -79,11 +83,12 @@ function createContext(): AppContext {
   })
   guard.setAlwaysRead(settings.get().alwaysReadCloudFiles)
 
-  // 走査の fs.stat も門番を通す。Windows ではこれがファイルを開くため、
-  // 通さないと「走査しただけでライブラリ全体がダウンロードされる」ことになる。
+  // 走査の fs.stat は読み込みとは別の遮断器にかける。
+  // 実測した iCloud のプレースホルダ (RECALL_ON_DATA_ACCESS) は stat では実体を
+  // 取りに行かないので、日付やサイズは拾う。遅ければ自動でやめる。
   const library = new Library(db, {
-    allow: () => guard.allowAutoRead(),
-    record: (ms) => guard.recordRead(ms, 'stat')
+    allow: () => guard.allowStat(),
+    record: (ms) => guard.recordStat(ms)
   })
 
   const thumbs = new DerivedImageCache({

@@ -42,10 +42,19 @@ export function formatEvent(event: LogEvent, now = new Date()): string {
   return columns.join('\t')
 }
 
+/** 集約中の記録 */
+interface Counter {
+  total: number
+  sinceLast: number
+  msTotal: number
+  last: LogEvent
+}
+
 export class DebugLog {
   private buffer: string[] = []
   private timer: NodeJS.Timeout | null = null
   private writing: Promise<void> = Promise.resolve()
+  private counters = new Map<string, Counter>()
 
   constructor(
     private readonly file: string,
@@ -81,6 +90,40 @@ export class DebugLog {
       this.timer = null
       void this.flush()
     }, FLUSH_INTERVAL)
+  }
+
+  /**
+   * 1 ファイルごとに出ると溢れる記録 (走査など) を、件数ごとに 1 行へまとめる。
+   * 端数は `flushCounts` で出す。遅い 1 件だけは `log` で個別に残すとよい。
+   */
+  countEvent(interval: number, event: LogEvent): void {
+    if (!this.enabled) return
+    const key = `${event.kind}\t${event.decision ?? '-'}`
+    const counter = this.counters.get(key) ?? { total: 0, sinceLast: 0, msTotal: 0, last: event }
+    counter.total++
+    counter.sinceLast++
+    counter.msTotal += event.ms ?? 0
+    counter.last = event
+    this.counters.set(key, counter)
+    if (counter.sinceLast >= interval) this.emitCount(counter)
+  }
+
+  /** 集約中の端数を出し切る (走査の完了時など)。 */
+  flushCounts(): void {
+    for (const counter of this.counters.values()) this.emitCount(counter)
+    this.counters.clear()
+  }
+
+  private emitCount(counter: Counter): void {
+    if (counter.sinceLast === 0) return
+    const average = counter.msTotal > 0 ? ` 平均 ${Math.round(counter.msTotal / counter.sinceLast)}ms` : ''
+    this.log({
+      kind: counter.last.kind,
+      decision: counter.last.decision,
+      note: `${counter.sinceLast} 件 (累計 ${counter.total})${average} 例: ${counter.last.target ?? '-'}`
+    })
+    counter.sinceLast = 0
+    counter.msTotal = 0
   }
 
   /**
@@ -148,6 +191,7 @@ export class DebugLog {
 
   /** 終了時に取りこぼしなく書き出す。 */
   async dispose(): Promise<void> {
+    this.flushCounts()
     if (this.timer) {
       clearTimeout(this.timer)
       this.timer = null

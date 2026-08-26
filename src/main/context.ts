@@ -66,7 +66,14 @@ export async function refreshPlaceholderIndex(
   ctx: AppContext,
   rootPath: string
 ): Promise<void> {
-  const paths = await listPlaceholders(rootPath)
+  const paths = await listPlaceholders(rootPath, {
+    // 9 万件の列挙は数十秒かかる。終わるまで 1 枚も弾けない状態にしないよう、
+    // 途中経過をそのつど門番へ渡す
+    onProgress: (partial) => {
+      if (ctx.library.currentRootPath !== rootPath) return
+      ctx.guard.setPlaceholderIndex(partial)
+    }
+  })
   // 待っている間にフォルダが切り替わっていたら捨てる
   if (ctx.library.currentRootPath !== rootPath) return
   ctx.guard.setPlaceholderIndex(paths)

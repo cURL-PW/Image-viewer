@@ -7,6 +7,9 @@ export default defineConfig({
   },
   test: {
     environment: 'node',
-    include: ['src/**/*.test.ts']
+    include: ['src/**/*.test.ts'],
+    // 9 万ファイルを作る規模テストは重いので、普段の実行からは外す
+    // (`npm run test:scale` で走らせる)
+    exclude: ['**/node_modules/**', 'src/**/*.scale.test.ts']
   }
 })

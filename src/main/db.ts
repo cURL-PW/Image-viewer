@@ -13,6 +13,19 @@ export interface ImageUpsert {
   fileName: string
   mtime: number
   size: number
+  /**
+   * 門番に止められて `stat` できなかった場合は true。
+   * mtime / size は不明なので、既存行の値を上書きしてはいけない
+   * (上書きすると「内容が変わった」と誤判定し、付与済みタグが消える)。
+   */
+  statSkipped?: boolean
+}
+
+/** 既知の行。走査時に 1 回だけ読み出して使い回す */
+export interface KnownImage {
+  id: number
+  mtime: number
+  size: number
 }
 
 export interface TagResult {
@@ -35,6 +48,11 @@ export function naturalKey(relPath: string): string {
 
 export class LibraryDb {
   readonly db: DatabaseSync
+  /**
+   * 用意済みのステートメント。`prepare` は SQL のコンパイルを伴うので、
+   * 走査のように 1 行ずつ回す処理では作り直さない (9 万件で数秒の差になる)。
+   */
+  private statements = new Map<string, ReturnType<DatabaseSync['prepare']>>()
 
   constructor(file: string) {
     // Electron 同梱の Node に内蔵された SQLite を使う (ネイティブモジュールの再ビルドが不要)
@@ -43,6 +61,15 @@ export class LibraryDb {
     this.db.exec('PRAGMA synchronous = NORMAL')
     this.db.exec('PRAGMA foreign_keys = ON')
     this.migrate()
+  }
+
+  /** 同じ SQL は使い回す。 */
+  private stmt(sql: string): ReturnType<DatabaseSync['prepare']> {
+    const existing = this.statements.get(sql)
+    if (existing) return existing
+    const prepared = this.db.prepare(sql)
+    this.statements.set(sql, prepared)
+    return prepared
   }
 
   /** 複数の書き込みを 1 トランザクションにまとめる。 */
@@ -110,6 +137,7 @@ export class LibraryDb {
   }
 
   close(): void {
+    this.statements.clear()
     this.db.close()
   }
 
@@ -132,58 +160,73 @@ export class LibraryDb {
 
   // --------------------------------------------------------------- images
 
-  /** 画像を登録/更新する。内容 (mtime/size) が変わった場合はタグを破棄して再スキャン対象にする。 */
-  upsertImage(rootId: number, file: ImageUpsert): { id: number; changed: boolean } {
-    const existing = this.db
-      .prepare('SELECT id, mtime, size FROM images WHERE root_id = ? AND rel_path = ?')
-      .get(rootId, file.relPath) as { id: number; mtime: number; size: number } | undefined
+  /**
+   * 画像を登録/更新する。内容 (mtime/size) が変わった場合はタグを破棄して再スキャン対象にする。
+   *
+   * `known` を渡すと既存行の問い合わせを省ける (走査は全件を 1 回で読んでいる)。
+   */
+  upsertImage(
+    rootId: number,
+    file: ImageUpsert,
+    known?: KnownImage | undefined
+  ): { id: number; added: boolean; changed: boolean } {
+    const existing =
+      known ??
+      (this.stmt('SELECT id, mtime, size FROM images WHERE root_id = ? AND rel_path = ?').get(
+        rootId,
+        file.relPath
+      ) as KnownImage | undefined)
 
     if (!existing) {
       const id = Number(
-        this.db
-          .prepare(
-            `INSERT INTO images (root_id, rel_path, dir_path, file_name, sort_key, mtime, size)
-             VALUES (?, ?, ?, ?, ?, ?, ?)`
-          )
-          .run(
-            rootId,
-            file.relPath,
-            file.dirPath,
-            file.fileName,
-            naturalKey(file.relPath),
-            file.mtime,
-            file.size
-          ).lastInsertRowid
+        this.stmt(
+          `INSERT INTO images (root_id, rel_path, dir_path, file_name, sort_key, mtime, size)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`
+        ).run(
+          rootId,
+          file.relPath,
+          file.dirPath,
+          file.fileName,
+          naturalKey(file.relPath),
+          file.mtime,
+          file.size
+        ).lastInsertRowid
       )
-      return { id, changed: true }
+      return { id, added: true, changed: true }
     }
+
+    // stat できていないものは内容の比較ができない。既存の値をそのまま残す
+    if (file.statSkipped) return { id: existing.id, added: false, changed: false }
 
     if (existing.mtime === file.mtime && existing.size === file.size) {
-      return { id: existing.id, changed: false }
+      return { id: existing.id, added: false, changed: false }
     }
 
-    this.db
-      .prepare(
-        `UPDATE images
-            SET mtime = ?, size = ?, width = NULL, height = NULL,
-                scanned_model = NULL, scan_error = NULL
-          WHERE id = ?`
-      )
-      .run(file.mtime, file.size, existing.id)
-    this.db.prepare('DELETE FROM image_tags WHERE image_id = ?').run(existing.id)
-    return { id: existing.id, changed: true }
+    this.stmt(
+      `UPDATE images
+          SET mtime = ?, size = ?, width = NULL, height = NULL,
+              scanned_model = NULL, scan_error = NULL
+        WHERE id = ?`
+    ).run(file.mtime, file.size, existing.id)
+    this.stmt('DELETE FROM image_tags WHERE image_id = ?').run(existing.id)
+    return { id: existing.id, added: false, changed: true }
   }
 
-  upsertMany(rootId: number, files: ImageUpsert[]): { added: number[]; updated: number[] } {
+  /**
+   * まとめて登録/更新する。
+   * `known` (relPath → 既存行) を渡すと 1 行ごとの検索をせずに済む。
+   */
+  upsertMany(
+    rootId: number,
+    files: ImageUpsert[],
+    known?: Map<string, KnownImage>
+  ): { added: number[]; updated: number[] } {
     const added: number[] = []
     const updated: number[] = []
     this.transaction(() => {
       for (const file of files) {
-        const before = this.db
-          .prepare('SELECT id FROM images WHERE root_id = ? AND rel_path = ?')
-          .get(rootId, file.relPath) as { id: number } | undefined
-        const result = this.upsertImage(rootId, file)
-        if (!before) added.push(result.id)
+        const result = this.upsertImage(rootId, file, known?.get(file.relPath))
+        if (result.added) added.push(result.id)
         else if (result.changed) updated.push(result.id)
       }
     })
@@ -215,11 +258,11 @@ export class LibraryDb {
   }
 
   /** ルート配下の全相対パス。起動時の差分同期に使う。 */
-  allRelPaths(rootId: number): Map<string, { id: number; mtime: number; size: number }> {
+  allRelPaths(rootId: number): Map<string, KnownImage> {
     const rows = this.db
       .prepare('SELECT id, rel_path, mtime, size FROM images WHERE root_id = ?')
       .all(rootId) as { id: number; rel_path: string; mtime: number; size: number }[]
-    const map = new Map<string, { id: number; mtime: number; size: number }>()
+    const map = new Map<string, KnownImage>()
     for (const row of rows) map.set(row.rel_path, { id: row.id, mtime: row.mtime, size: row.size })
     return map
   }

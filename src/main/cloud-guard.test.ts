@@ -1,7 +1,13 @@
 import { describe, expect, it, vi } from 'vitest'
 import { CloudGuard, isLikelyPlaceholder, isNotDownloadedError, NotDownloadedError } from './cloud-guard'
 
-const OPTIONS = { slowReadMs: 1000, slowReadLimit: 2, fastRecoveryLimit: 3 }
+const OPTIONS = {
+  slowReadMs: 1000,
+  slowReadLimit: 2,
+  fastRecoveryLimit: 3,
+  slowStatMs: 500,
+  slowStatLimit: 3
+}
 
 describe('isLikelyPlaceholder', () => {
   it('Windows で実体の割り当てが無いファイルを検出する', () => {
@@ -249,5 +255,59 @@ describe('CloudGuard の正確な一覧 (ファイル属性ベース)', () => {
     guard.setPlaceholderIndex(index())
     guard.setAlwaysRead(true)
     expect(await guard.isNotDownloaded('C:\\Photos\\a.heic')).toBe(false)
+  })
+})
+
+describe('CloudGuard の stat 専用遮断器', () => {
+  it('既定では走査の stat を許可する', () => {
+    const guard = new CloudGuard(OPTIONS)
+    expect(guard.allowStat()).toBe(true)
+  })
+
+  it('読み込みを止めていても stat は続ける', () => {
+    // stat はデータを読まないので、日付やサイズは取りに行ってよい
+    const guard = new CloudGuard(OPTIONS)
+    guard.recordRead(5000)
+    guard.recordRead(5000)
+    expect(guard.allowAutoRead()).toBe(false)
+    expect(guard.allowStat()).toBe(true)
+  })
+
+  it('遅い stat が続いたら stat も読み込みも止める', () => {
+    const guard = new CloudGuard(OPTIONS)
+    guard.recordStat(3000)
+    guard.recordStat(3000)
+    expect(guard.allowStat()).toBe(true)
+
+    guard.recordStat(3000)
+    expect(guard.allowStat()).toBe(false)
+    // stat でこれだけ遅いなら実体を取りに行っている。読み込みも止める
+    expect(guard.allowAutoRead()).toBe(false)
+    expect(guard.diagnostics.statBlocked).toBe(true)
+  })
+
+  it('速い stat が挟まれば連続とみなさない', () => {
+    const guard = new CloudGuard(OPTIONS)
+    guard.recordStat(3000)
+    guard.recordStat(3000)
+    guard.recordStat(5)
+    guard.recordStat(3000)
+    expect(guard.allowStat()).toBe(true)
+  })
+
+  it('ルート切り替えで stat の判定もやり直す', () => {
+    const guard = new CloudGuard(OPTIONS)
+    for (let i = 0; i < 3; i++) guard.recordStat(3000)
+    expect(guard.allowStat()).toBe(false)
+
+    guard.reset()
+    expect(guard.allowStat()).toBe(true)
+  })
+
+  it('「常に読み込む」なら stat も止めない', () => {
+    const guard = new CloudGuard(OPTIONS)
+    for (let i = 0; i < 3; i++) guard.recordStat(3000)
+    guard.setAlwaysRead(true)
+    expect(guard.allowStat()).toBe(true)
   })
 })

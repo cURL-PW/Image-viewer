@@ -54,11 +54,25 @@ describe('buildScanArgs', () => {
   it('データを読まない列挙になっている', () => {
     const args = buildScanArgs('C:\\Photos')
     const script = args[args.length - 1]
-    expect(script).toContain('Get-ChildItem')
-    expect(script).toContain('-LiteralPath')
-    expect(script).toContain(`-band ${PLACEHOLDER_ATTRIBUTE_MASK}`)
+    expect(script).toContain(`-band $mask`)
+    expect(script).toContain(`$mask = ${PLACEHOLDER_ATTRIBUTE_MASK}`)
+    expect(script).toContain("'C:\\Photos'")
     // 中身を読む Get-Content などが混ざっていないこと
     expect(script).not.toContain('Get-Content')
+  })
+
+  it('1 ファイルずつオブジェクトを作るパイプラインを使わない', () => {
+    // 89,358 枚では Get-ChildItem -Recurse が 120 秒でも終わらなかった。
+    // 列挙時にキャッシュされた属性をそのまま読む .NET の列挙に置き換えてある
+    const script = buildScanArgs('C:\\Photos').at(-1) ?? ''
+    expect(script).not.toContain('Get-ChildItem')
+    expect(script).toContain('EnumerateFiles')
+    expect(script).toContain('EnumerateDirectories')
+  })
+
+  it('権限の無いフォルダで全体が止まらないようにする', () => {
+    const script = buildScanArgs('C:\\Photos').at(-1) ?? ''
+    expect(script).toContain('catch {}')
   })
 
   it('プロファイルや対話を無効にして起動する', () => {
@@ -95,14 +109,49 @@ describe('listPlaceholders', () => {
   })
 
   it('列挙結果を集合として返す', async () => {
-    const run = vi.fn().mockResolvedValue('C:\\Photos\\a.heic\nC:\\Photos\\b.heic')
+    const run = vi.fn(async (_args: string[], onChunk: (chunk: string) => void) => {
+      onChunk('C:\\Photos\\a.heic\nC:\\Photos\\b.heic')
+    })
     const result = await listPlaceholders('C:\\Photos', { run, platform: 'win32' })
     expect(result).toEqual(new Set(['c:\\photos\\a.heic', 'c:\\photos\\b.heic']))
+  })
+
+  it('チャンクの途中で切れた行をまたいで組み立てる', async () => {
+    const run = vi.fn(async (_args: string[], onChunk: (chunk: string) => void) => {
+      onChunk('C:\\Photos\\a.he')
+      onChunk('ic\r\nC:\\Photos\\b.heic\r\n')
+    })
+    const result = await listPlaceholders('C:\\Photos', { run, platform: 'win32' })
+    expect(result).toEqual(new Set(['c:\\photos\\a.heic', 'c:\\photos\\b.heic']))
+  })
+
+  it('完了を待たずに途中経過を渡す', async () => {
+    // 9 万件の列挙が終わるまで 1 枚も弾けない、という状態を作らないため
+    const run = vi.fn(async (_args: string[], onChunk: (chunk: string) => void) => {
+      for (let i = 0; i < 5; i++) onChunk(`C:\\Photos\\IMG_${i}.heic\n`)
+    })
+    const progress: number[] = []
+    await listPlaceholders('C:\\Photos', {
+      run,
+      platform: 'win32',
+      progressInterval: 2,
+      onProgress: (paths) => progress.push(paths.size)
+    })
+    expect(progress).toEqual([2, 4])
   })
 
   it('失敗しても例外を投げず null を返す (遮断器へフォールバックする)', async () => {
     const run = vi.fn().mockRejectedValue(new Error('PowerShell が使えません'))
     expect(await listPlaceholders('C:\\Photos', { run, platform: 'win32' })).toBeNull()
+  })
+
+  it('途中で失敗しても、そこまでに取れた分は活かす', async () => {
+    const run = vi.fn(async (_args: string[], onChunk: (chunk: string) => void) => {
+      onChunk('C:\\Photos\\a.heic\n')
+      throw new Error('列挙が進まなくなりました')
+    })
+    const result = await listPlaceholders('C:\\Photos', { run, platform: 'win32' })
+    expect(result).toEqual(new Set(['c:\\photos\\a.heic']))
   })
 })
 

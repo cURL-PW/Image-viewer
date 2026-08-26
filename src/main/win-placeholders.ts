@@ -36,13 +36,34 @@ export function quoteForPowerShell(value: string): string {
   return `'${value.replace(/'/g, "''")}'`
 }
 
-/** ルート配下のプレースホルダだけを列挙するコマンド。 */
+/**
+ * ルート配下のプレースホルダだけを列挙するコマンド。
+ *
+ * `Get-ChildItem -Recurse | Where-Object` は 1 ファイルごとに PowerShell の
+ * オブジェクトをパイプラインへ流すため、実機の 89,358 枚では 120 秒でも終わらなかった。
+ * .NET の列挙なら、列挙時にキャッシュされた `Attributes` をそのまま読めるので
+ * 追加の syscall もオブジェクト生成も要らない。
+ *
+ * フォルダごとに try/catch して、権限の無い場所で全体が止まらないようにする。
+ */
 export function buildScanArgs(rootPath: string): string[] {
-  const script =
-    `Get-ChildItem -LiteralPath ${quoteForPowerShell(rootPath)} -Recurse -File -Force ` +
-    `-ErrorAction SilentlyContinue | ` +
-    `Where-Object { $_.Attributes.value__ -band ${PLACEHOLDER_ATTRIBUTE_MASK} } | ` +
-    `ForEach-Object { $_.FullName }`
+  const script = `
+$ErrorActionPreference = 'SilentlyContinue'
+$mask = ${PLACEHOLDER_ATTRIBUTE_MASK}
+$out = [Console]::Out
+$stack = New-Object System.Collections.Stack
+$stack.Push((New-Object System.IO.DirectoryInfo ${quoteForPowerShell(rootPath)}))
+while ($stack.Count -gt 0) {
+  $dir = $stack.Pop()
+  try {
+    foreach ($file in $dir.EnumerateFiles()) {
+      if (([int]$file.Attributes -band $mask) -ne 0) { $out.WriteLine($file.FullName) }
+    }
+    foreach ($sub in $dir.EnumerateDirectories()) { $stack.Push($sub) }
+  } catch {}
+}
+$out.Flush()
+`.trim()
   return ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', script]
 }
 
@@ -57,31 +78,52 @@ export function parseScanOutput(stdout: string): Set<string> {
 
 export interface ScanOptions {
   /** テストから差し替えるための実行関数 */
-  run?: (args: string[]) => Promise<string>
-  timeoutMs?: number
+  run?: (args: string[], onChunk: (chunk: string) => void) => Promise<void>
+  /** 出力が途絶えてから諦めるまでの時間 (ms) */
+  idleTimeoutMs?: number
   platform?: NodeJS.Platform
+  /** 途中経過を受け取る。完了を待たずに 1 枚ずつの判定を始められる */
+  onProgress?: (paths: Set<string>) => void
+  /** 何件ごとに `onProgress` を呼ぶか */
+  progressInterval?: number
 }
 
-function runPowerShell(args: string[], timeoutMs: number): Promise<string> {
+/** 既定の途中経過の間隔 */
+const PROGRESS_INTERVAL = 5000
+/** 既定の無出力タイムアウト。全体の上限ではなく「進んでいないこと」で打ち切る */
+const IDLE_TIMEOUT_MS = 120_000
+
+function runPowerShell(
+  args: string[],
+  onChunk: (chunk: string) => void,
+  idleTimeoutMs: number
+): Promise<void> {
   return new Promise((resolve, reject) => {
     const child = spawn('powershell.exe', args, { windowsHide: true })
-    let stdout = ''
-    const timer = setTimeout(() => {
+    let timer: NodeJS.Timeout
+
+    const fail = (error: Error): void => {
+      clearTimeout(timer)
       child.kill()
-      reject(new Error('プレースホルダの列挙がタイムアウトしました'))
-    }, timeoutMs)
+      reject(error)
+    }
+    // 全体の上限ではなく「出力が止まったら」で打ち切る。
+    // 9 万件を列挙している最中に時間切れにしても意味がない
+    const arm = (): void => {
+      clearTimeout(timer)
+      timer = setTimeout(() => fail(new Error('プレースホルダの列挙が進まなくなりました')), idleTimeoutMs)
+    }
+    arm()
 
     child.stdout.setEncoding('utf8')
     child.stdout.on('data', (chunk: string) => {
-      stdout += chunk
+      arm()
+      onChunk(chunk)
     })
-    child.on('error', (error) => {
-      clearTimeout(timer)
-      reject(error)
-    })
+    child.on('error', (error) => fail(error))
     child.on('close', (code) => {
       clearTimeout(timer)
-      if (code === 0) resolve(stdout)
+      if (code === 0) resolve()
       else reject(new Error(`PowerShell が異常終了しました (code ${code})`))
     })
   })
@@ -91,6 +133,9 @@ function runPowerShell(args: string[], timeoutMs: number): Promise<string> {
  * ルート配下の未ダウンロードファイルを列挙する。
  * Windows 以外、または列挙に失敗した場合は null を返し、呼び出し側は
  * 従来の「遅さの回路遮断器」にフォールバックする。
+ *
+ * 出力は逐次読み、`onProgress` で途中経過を渡す。9 万件の列挙が終わるまで
+ * 何も判定できない状態を作らないため。
  */
 export async function listPlaceholders(
   rootPath: string,
@@ -100,14 +145,39 @@ export async function listPlaceholders(
   if (platform !== 'win32') return null
 
   const args = buildScanArgs(rootPath)
-  const run = options.run ?? ((a: string[]) => runPowerShell(a, options.timeoutMs ?? 120_000))
+  const idleTimeoutMs = options.idleTimeoutMs ?? IDLE_TIMEOUT_MS
+  const run = options.run ?? ((a, onChunk) => runPowerShell(a, onChunk, idleTimeoutMs))
   const startedAt = Date.now()
   debugLog().log({ kind: 'ps-scan', decision: 'allowed', target: rootPath, note: '列挙を開始' })
 
+  const paths = new Set<string>()
+  const interval = options.progressInterval ?? PROGRESS_INTERVAL
+  let rest = ''
+  let lastReported = 0
+
+  const consume = (chunk: string): void => {
+    const lines = (rest + chunk).split(/\r?\n/)
+    // 最後の要素は行の途中かもしれないので次のチャンクへ持ち越す
+    rest = lines.pop() ?? ''
+    for (const line of lines) {
+      const trimmed = line.trim()
+      if (trimmed !== '') paths.add(normalizePath(trimmed))
+    }
+    if (paths.size - lastReported < interval) return
+    lastReported = paths.size
+    debugLog().log({
+      kind: 'ps-scan',
+      decision: 'allowed',
+      ms: Date.now() - startedAt,
+      target: rootPath,
+      note: `途中経過 ${paths.size} 件`
+    })
+    options.onProgress?.(new Set(paths))
+  }
+
   try {
-    const paths = parseScanOutput(await run(args))
-    // 先頭の 1 件を残しておく。DB 側のパスと突き合わせて、
-    // 照合が外れていないかを目で確かめられるようにするため
+    await run(args, consume)
+    consume('\n')
     const sample = paths.values().next().value ?? 'なし'
     debugLog().log({
       kind: 'ps-scan',
@@ -124,8 +194,9 @@ export async function listPlaceholders(
       decision: 'skipped',
       ms: Date.now() - startedAt,
       target: rootPath,
-      note: `失敗: ${error instanceof Error ? error.message : String(error)}`
+      note: `失敗: ${error instanceof Error ? error.message : String(error)} (${paths.size} 件まで取得)`
     })
-    return null
+    // 途中まで取れているなら、それだけでも渡したほうが弾ける枚数は増える
+    return paths.size > 0 ? paths : null
   }
 }

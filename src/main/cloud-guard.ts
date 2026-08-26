@@ -77,12 +77,19 @@ export interface CloudGuardOptions {
   slowReadLimit: number
   /** 遮断中に「速い」が何回続いたら解除するか */
   fastRecoveryLimit: number
+  /** これを超える stat を「遅い」とみなす (ms) */
+  slowStatMs: number
+  /** 遅い stat が何回続いたら stat をやめるか */
+  slowStatLimit: number
 }
 
 export const DEFAULT_CLOUD_GUARD_OPTIONS: CloudGuardOptions = {
   slowReadMs: 1500,
   slowReadLimit: 2,
-  fastRecoveryLimit: 3
+  fastRecoveryLimit: 3,
+  // stat はデータを読まないので本来は速い。数百 ms かかるなら実体を取りに行っている
+  slowStatMs: 500,
+  slowStatLimit: 3
 }
 
 interface CloudGuardEvents {
@@ -107,6 +114,16 @@ export class CloudGuard extends EventEmitter<CloudGuardEvents> {
   /** 一覧による判定の集計 (ログを溢れさせないため) */
   private indexHits = 0
   private indexMisses = 0
+  /**
+   * 走査の `stat` を止めているか。読み込みの遮断とは別に持つ。
+   *
+   * 実測した iCloud のプレースホルダは `RECALL_ON_DATA_ACCESS` なので、
+   * stat では実体を取りに行かない。mtime とサイズが分かると日付順に並べられるので、
+   * 既定では stat する。ただし `RECALL_ON_OPEN` を使う同期クライアントでは
+   * stat でも実体を取りに行くため、遅さを測って自動でやめる。
+   */
+  private statBlocked = false
+  private consecutiveSlowStat = 0
 
   constructor(private readonly options: CloudGuardOptions = DEFAULT_CLOUD_GUARD_OPTIONS) {
     super()
@@ -131,6 +148,7 @@ export class CloudGuard extends EventEmitter<CloudGuardEvents> {
     return {
       ...this.status,
       alwaysRead: this.alwaysRead,
+      statBlocked: this.statBlocked,
       exactIndex: this.placeholderIndex !== null,
       indexSize: this.placeholderIndex?.size ?? 0,
       platform: process.platform,
@@ -138,6 +156,35 @@ export class CloudGuard extends EventEmitter<CloudGuardEvents> {
       reads: [...this.reads],
       placeholders: [...this.placeholders]
     }
+  }
+
+  /** 走査で `stat` してよいか。 */
+  allowStat(): boolean {
+    return this.alwaysRead || !this.statBlocked
+  }
+
+  /**
+   * 走査の `stat` にかかった時間を記録する。
+   * 遅い状態が続けば stat をやめ、実体の取得も止める。
+   */
+  recordStat(durationMs: number): void {
+    this.record(this.reads, { kind: 'stat', ms: Math.round(durationMs) })
+    if (durationMs <= this.options.slowStatMs) {
+      this.consecutiveSlowStat = 0
+      return
+    }
+    this.consecutiveSlowStat++
+    if (this.consecutiveSlowStat < this.options.slowStatLimit || this.statBlocked) return
+
+    this.statBlocked = true
+    debugLog().log({
+      kind: 'guard-mode',
+      decision: 'blocked',
+      ms: Math.round(durationMs),
+      note: 'stat が遅いので走査の stat を停止 (実体を取りに行っている可能性)'
+    })
+    // stat でここまで遅いなら読み込みは論外なので、まとめて止める
+    this.block('slow')
   }
 
   /** 未ダウンロードファイルの正確な一覧があるか。 */
@@ -207,6 +254,8 @@ export class CloudGuard extends EventEmitter<CloudGuardEvents> {
     this.reason = remembered ? 'remembered' : null
     this.consecutiveSlow = 0
     this.consecutiveFast = 0
+    this.consecutiveSlowStat = 0
+    this.statBlocked = false
     this.reads = []
     this.placeholders = []
     this.placeholderIndex = null

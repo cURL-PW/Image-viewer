@@ -15,6 +15,11 @@ import { providerCandidates, type WorkerRequest, type WorkerResponse } from './p
 const QUEUE_CHUNK = 64
 /** 進捗ブロードキャストの最小間隔 (ms) */
 const PROGRESS_INTERVAL = 250
+/**
+ * 進捗の集計 (未スキャン枚数の COUNT) をやり直す最小間隔 (ms)。
+ * 走査中は変更通知が続くので、9 万行の集計を毎回やると走査ごと詰まる。
+ */
+const COUNT_INTERVAL = 500
 /** 未ダウンロードのクラウドファイルに付ける印 */
 export const PLACEHOLDER_MESSAGE = '未ダウンロード (iCloud などのオンデマンドファイル)'
 /** 一括ダウンロードの同時実行数。回線と待ち時間に優しくする */
@@ -47,6 +52,8 @@ export class TaggerService {
   private priorityDir: string | null = null
   private lastBroadcast = 0
   private progressTimer: NodeJS.Timeout | null = null
+  private lastCount = 0
+  private countTimer: NodeJS.Timeout | null = null
 
   private progress: ScanProgress = {
     done: 0,
@@ -147,6 +154,7 @@ export class TaggerService {
   async dispose(): Promise<void> {
     this.disposed = true
     if (this.progressTimer) clearTimeout(this.progressTimer)
+    if (this.countTimer) clearTimeout(this.countTimer)
     await this.disposeWorker()
   }
 
@@ -502,7 +510,26 @@ export class TaggerService {
     this.broadcastProgress(true)
   }
 
+  /**
+   * 未スキャン枚数を数え直す。全行の集計なので、続けて呼ばれたら間引く
+   * (走査中はバッチごとに変更通知が来る)。
+   */
   private refreshProgress(): void {
+    const now = Date.now()
+    const waited = now - this.lastCount
+    if (waited < COUNT_INTERVAL) {
+      if (this.countTimer) return
+      this.countTimer = setTimeout(() => {
+        this.countTimer = null
+        this.refreshProgress()
+      }, COUNT_INTERVAL - waited)
+      return
+    }
+    this.lastCount = now
+    this.countNow()
+  }
+
+  private countNow(): void {
     const cloud = this.guard.status
     const rootId = this.library.currentRootId
     if (rootId === null) {

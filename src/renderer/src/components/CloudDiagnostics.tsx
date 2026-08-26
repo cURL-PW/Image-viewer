@@ -72,6 +72,10 @@ export default function CloudDiagnosticsPanel(): React.JSX.Element {
           {diagnostics.alwaysRead || !diagnostics.blocked ? '許可' : '停止中'}
           {diagnostics.alwaysRead ? ' (常に読み込む設定)' : ''}
         </dd>
+        <dt>走査の stat</dt>
+        <dd>
+          {diagnostics.statBlocked ? '停止中 (遅すぎるため)' : '実行'}
+        </dd>
         <dt>判定の方法</dt>
         <dd>
           {diagnostics.exactIndex
