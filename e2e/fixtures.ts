@@ -65,6 +65,31 @@ export async function createFixture(): Promise<Fixture> {
   return { root, userData }
 }
 
+/**
+ * 表示の確かめ用に、大きさの極端な画像だけを置いたフィクスチャ。
+ *   wide.png  — 画面より大きい横長 (幅で頭打ちになる)
+ *   tall.png  — 画面より大きい縦長 (高さで頭打ちになる)
+ *   tiny.png  — 画面よりずっと小さい (拡大してはいけない)
+ */
+export const DISPLAY_SIZES = {
+  'wide.png': { width: 3000, height: 1500 },
+  'tall.png': { width: 1200, height: 2400 },
+  'tiny.png': { width: 64, height: 48 }
+} as const
+
+export async function createDisplayFixture(): Promise<Fixture> {
+  const base = await fs.mkdtemp(path.join(os.tmpdir(), 'image-viewer-e2e-'))
+  const root = path.join(base, 'library')
+  const userData = path.join(base, 'userdata')
+  await fs.mkdir(userData, { recursive: true })
+
+  let index = 0
+  for (const [name, size] of Object.entries(DISPLAY_SIZES)) {
+    await writeImage(path.join(root, name), index++, size.width, size.height)
+  }
+  return { root, userData }
+}
+
 /** 既定モデル ID に対応するキャッシュ先。ここに置いておけばダウンロードは走らない。 */
 export function modelCacheDir(userData: string, modelId = DEFAULT_SETTINGS.modelId): string {
   return path.join(userData, 'models', modelId.replace(/[^A-Za-z0-9._-]+/g, '_'))

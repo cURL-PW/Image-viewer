@@ -58,4 +58,6 @@ export interface RendererApi {
   onIndexProgress(listener: (progress: IndexProgress) => void): () => void
   onImageTagged(listener: (payload: { id: number }) => void): () => void
   onRootChanged(listener: (root: RootInfo) => void): () => void
+  /** マウスの「戻る」ボタン。DOM のイベントが来ない構成のための保険 */
+  onGoBack(listener: () => void): () => void
 }

@@ -161,6 +161,14 @@ function createWindow(): BrowserWindow {
     })
   })
 
+  // マウスの「戻る」ボタン。Windows ではこちらで飛んでくることがあるので、
+  // renderer 側の mousedown と両方で受ける (どちらか一方しか来ない構成がある)
+  window.on('app-command', (event, command) => {
+    if (command !== 'browser-backward') return
+    event.preventDefault()
+    window.webContents.send(IPC.eventGoBack)
+  })
+
   // 外部リンクは既定のブラウザで開き、アプリ内での遷移は許可しない
   window.webContents.setWindowOpenHandler(({ url }) => {
     void shell.openExternal(url)

@@ -36,7 +36,8 @@ const api: RendererApi = {
   onScanProgress: (listener) => subscribe(IPC.eventScanProgress, listener),
   onIndexProgress: (listener) => subscribe(IPC.eventIndexProgress, listener),
   onImageTagged: (listener) => subscribe(IPC.eventImageTagged, listener),
-  onRootChanged: (listener) => subscribe(IPC.eventRootChanged, listener)
+  onRootChanged: (listener) => subscribe(IPC.eventRootChanged, listener),
+  onGoBack: (listener) => subscribe(IPC.eventGoBack, listener)
 }
 
 contextBridge.exposeInMainWorld('api', api)

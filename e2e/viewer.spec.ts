@@ -92,21 +92,71 @@ test('フォルダを選ぶと配下 (再帰) の画像だけに絞り込まれ�
   await expectImageCount(2)
 })
 
-test('画像をクリックすると単画像ビューが開き、既定で幅いっぱいに表示される', async () => {
+test('画像をクリックすると単画像ビューが開き、既定で画像全体が収まる', async () => {
   await window.locator('.cell').first().click()
   await expect(window.locator('.viewer')).toBeVisible()
   await expect(indexLabel()).toHaveText('1 / 8')
   await expect(zoomLabel()).toHaveText('100%')
 
-  // 画像の表示幅がステージ幅と一致している (fit-width)
-  const widths = await window.evaluate(() => {
+  // 幅も高さもはみ出さない (スクロールせずに全体が見える)
+  const size = await window.evaluate(() => {
     const stage = document.querySelector('.viewer__stage') as HTMLElement
     const image = document.querySelector('.viewer__image') as HTMLImageElement
-    return { stage: stage.clientWidth, image: image.getBoundingClientRect().width }
+    const box = image.getBoundingClientRect()
+    return {
+      stage: { width: stage.clientWidth, height: stage.clientHeight },
+      image: { width: box.width, height: box.height },
+      overflow: stage.scrollHeight - stage.clientHeight
+    }
   })
-  expect(Math.abs(widths.image - widths.stage)).toBeLessThanOrEqual(1)
+  expect(size.image.width).toBeLessThanOrEqual(size.stage.width + 1)
+  expect(size.image.height).toBeLessThanOrEqual(size.stage.height + 1)
+  expect(size.overflow).toBeLessThanOrEqual(1)
 
   await window.screenshot({ path: `${SHOTS}/02-viewer.png` })
+})
+
+test('左下の ✕ でグリッドへ戻れる (ページ送りの領域とかぶらない)', async () => {
+  // ページ送りは絶対配置なので、覆う範囲を区切らないとバー全体を隠してしまう。
+  // タグ欄を開いた既定の状態だと ✕ が完全に隠れて押せなくなっていた。
+  await window.locator('.cell').first().click()
+  await expect(window.locator('.viewer')).toBeVisible()
+  await expect(window.locator('.viewer__tags')).toBeVisible()
+
+  await window.locator('.viewer__bar .button--icon').click()
+  await expect(window.locator('.grid')).toBeVisible()
+  await expect(window.locator('.viewer')).toHaveCount(0)
+})
+
+test('マウスの戻るボタンでグリッドへ戻る', async () => {
+  await window.locator('.cell').first().click()
+  await expect(window.locator('.viewer')).toBeVisible()
+
+  // Playwright の mouse API は戻るボタンを送れないので、DOM のイベントで確かめる
+  // (この spec では `window` が Page 変数なので globalThis を使う)
+  await window.evaluate(() => {
+    globalThis.dispatchEvent(new MouseEvent('mousedown', { button: 3, bubbles: true }))
+  })
+  await expect(window.locator('.grid')).toBeVisible()
+  await expect(window.locator('.viewer')).toHaveCount(0)
+})
+
+test('Windows の app-command 経由でもグリッドへ戻る', async () => {
+  // DOM のイベントが来ない構成のための保険。main プロセス側の経路を直接叩く
+  await window.locator('.cell').first().click()
+  await expect(window.locator('.viewer')).toBeVisible()
+
+  await app.evaluate(({ BrowserWindow }) => {
+    const [target] = BrowserWindow.getAllWindows()
+    // 型定義には無いが、Electron が発行するのと同じイベントを流す
+    ;(target as unknown as { emit: (name: string, ...args: unknown[]) => void }).emit(
+      'app-command',
+      { preventDefault: () => {} },
+      'browser-backward'
+    )
+  })
+  await expect(window.locator('.grid')).toBeVisible()
+  await expect(window.locator('.viewer')).toHaveCount(0)
 })
 
 test('画像の左右端クリックで前後の画像へ移動する', async () => {
@@ -152,7 +202,7 @@ test('ホイールで拡大縮小でき、ズーム中は端クリックが無�
   await expect(window.locator('.viewer__edge--next')).toHaveCount(1)
 })
 
-test('ダブルクリックで幅いっぱい表示に戻る', async () => {
+test('ダブルクリックで全体表示に戻る', async () => {
   await window.locator('.cell').first().click()
   const box = await window.locator('.viewer__stage').boundingBox()
   if (!box) throw new Error('ステージが見つかりません')
@@ -164,7 +214,7 @@ test('ダブルクリックで幅いっぱい表示に戻る', async () => {
   await expect(zoomLabel()).toHaveText('100%')
 })
 
-test('画像を切り替えるとズームは幅いっぱいにリセットされる', async () => {
+test('画像を切り替えるとズームは全体表示にリセットされる', async () => {
   await window.locator('.cell').first().click()
   const box = await window.locator('.viewer__stage').boundingBox()
   if (!box) throw new Error('ステージが見つかりません')

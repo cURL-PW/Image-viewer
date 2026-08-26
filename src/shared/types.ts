@@ -248,7 +248,9 @@ export const IPC = {
   eventScanProgress: 'event:scanProgress',
   eventIndexProgress: 'event:indexProgress',
   eventImageTagged: 'event:imageTagged',
-  eventRootChanged: 'event:rootChanged'
+  eventRootChanged: 'event:rootChanged',
+  /** マウスの「戻る」ボタン (Windows の app-command 経由) */
+  eventGoBack: 'event:goBack'
 } as const
 
 export type ScanCommand = 'pause' | 'resume' | 'rescanAll' | 'retryErrors'

@@ -195,6 +195,10 @@ export const useStore = create<State & Actions>((set, get) => {
         }))
       })
       window.api.onIndexProgress((indexProgress) => set({ index: indexProgress }))
+      // マウスの「戻る」ボタン。単画像ビューを開いていれば一覧へ戻る
+      window.api.onGoBack(() => {
+        if (get().viewerIndex !== null) get().closeViewer()
+      })
       window.api.onImageTagged(() => scheduleRefresh(TAGGED_DEBOUNCE))
 
       if (root) {

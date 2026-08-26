@@ -510,12 +510,29 @@ select,
   background: #0e0e11;
 }
 
+/*
+ * ステージとページ送りの入れ物。
+ * ページ送りは絶対配置なので、.viewer 直下に置くと下のバー (✕ など) まで覆ってしまう。
+ * 高さの決め打ちで避けるとタグ欄の開閉でずれるため、覆ってよい範囲を入れ物で区切る。
+ */
+.viewer__canvas {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
 .viewer__stage {
   position: relative;
   display: flex;
   flex: 1;
   min-height: 0;
   overflow: auto;
+  /*
+   * スクロールバーの分を常に空けておく。拡大した瞬間にバーが出て表示領域が縮み、
+   * その結果さらに横スクロールが出る、という揺り戻しを防ぐ。
+   */
+  scrollbar-gutter: stable;
 }
 
 .viewer__image {
@@ -525,10 +542,19 @@ select,
   max-width: none;
 }
 
+/*
+ * 既定の「全体表示」。はみ出さない範囲で最大にし、元より大きくはしない。
+ * 幅を JS で指定しないので、読み込み直後に大きさが跳ねることもない。
+ */
+.viewer__image--fit {
+  max-width: 100%;
+  max-height: 100%;
+}
+
 .viewer__edge {
   position: absolute;
   top: 0;
-  bottom: 42px;
+  bottom: 0;
   display: flex;
   align-items: center;
   padding: 0 12px;

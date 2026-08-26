@@ -38,8 +38,10 @@ function tagClass(category: number): string {
 
 /**
  * 単画像ビュー。
- * 既定はウィンドウ幅いっぱい (fit-width)、ホイールでカーソル位置を中心に拡大縮小、
- * 等倍表示のときだけ左右端のクリックでページ送りできる。
+ *
+ * 既定は「画像全体が収まる大きさ」。はみ出さない範囲で最大にし、画面より小さい画像は
+ * 引き伸ばさず等倍のまま中央に置く。ホイールでカーソル位置を中心に拡大縮小でき、
+ * 全体表示のときだけ左右端のクリックでページ送りできる。
  */
 export default function ImageViewer(): React.JSX.Element | null {
   const ids = useStore((state) => state.ids)
@@ -54,7 +56,8 @@ export default function ImageViewer(): React.JSX.Element | null {
 
   const viewerRef = useRef<HTMLDivElement>(null)
   const stageRef = useRef<HTMLDivElement>(null)
-  const [stageWidth, setStageWidth] = useState(0)
+  const [stageSize, setStageSize] = useState({ width: 0, height: 0 })
+  const [natural, setNatural] = useState<{ width: number; height: number } | null>(null)
   const [scale, setScale] = useState(1)
   const [info, setInfo] = useState<ImageInfo | null>(null)
   const [showTags, setShowTags] = useState(true)
@@ -65,7 +68,21 @@ export default function ImageViewer(): React.JSX.Element | null {
 
   const currentId = viewerIndex !== null ? ids[viewerIndex] : undefined
   const image = currentId !== undefined ? images[currentId] : undefined
-  const isFitWidth = Math.abs(scale - 1) < 0.001
+  /** 等倍 (scale = 1) は「全体が収まる大きさ」。このときだけページ送りを出す */
+  const isFitAll = Math.abs(scale - 1) < 0.001
+
+  /**
+   * 全体表示のときの表示幅。拡大縮小の基準になる。
+   *
+   * ステージに収まる範囲で最大、ただし元の大きさは超えない
+   * (小さい画像を引き伸ばさないため)。scale = 1 の見え方は CSS の
+   * max-width / max-height に任せていて、ここはその結果と一致する。
+   */
+  const baseWidth = useMemo(() => {
+    if (!natural || natural.height === 0) return stageSize.width
+    const aspect = natural.width / natural.height
+    return Math.min(natural.width, stageSize.width, stageSize.height * aspect)
+  }, [natural, stageSize])
 
   // 現在の画像と、その前後をまとめて取得しておく
   const neighborhood = useMemo(() => {
@@ -82,15 +99,18 @@ export default function ImageViewer(): React.JSX.Element | null {
   useLayoutEffect(() => {
     const element = stageRef.current
     if (!element) return
-    const observer = new ResizeObserver(([entry]) => setStageWidth(entry.contentRect.width))
+    const observer = new ResizeObserver(([entry]) =>
+      setStageSize({ width: entry.contentRect.width, height: entry.contentRect.height })
+    )
     observer.observe(element)
-    setStageWidth(element.clientWidth)
+    setStageSize({ width: element.clientWidth, height: element.clientHeight })
     return () => observer.disconnect()
   }, [])
 
-  // 画像を切り替えたら fit-width に戻し、スクロールも先頭へ
+  // 画像を切り替えたら全体表示に戻し、スクロールも先頭へ
   useEffect(() => {
     setScale(1)
+    setNatural(null)
     const stage = stageRef.current
     if (stage) {
       stage.scrollLeft = 0
@@ -163,6 +183,18 @@ export default function ImageViewer(): React.JSX.Element | null {
     return () => element.removeEventListener('wheel', onWheel)
   }, [zoomAt])
 
+  // マウスの「戻る」ボタンで一覧へ帰る。左下の ✕ と同じ動作
+  useEffect(() => {
+    const onBackButton = (event: MouseEvent): void => {
+      if (event.button !== 3) return
+      // 押しっぱなしで履歴を戻ろうとするのを止める
+      event.preventDefault()
+      closeViewer()
+    }
+    window.addEventListener('mousedown', onBackButton)
+    return () => window.removeEventListener('mousedown', onBackButton)
+  }, [closeViewer])
+
   const onMouseDown = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
     const stage = stageRef.current
     if (!stage || event.button !== 0) return
@@ -195,53 +227,69 @@ export default function ImageViewer(): React.JSX.Element | null {
 
   if (viewerIndex === null || currentId === undefined) return null
 
-  const displayWidth = stageWidth > 0 ? stageWidth * scale : undefined
+  // 全体表示は CSS (max-width / max-height) に任せる。
+  // 幅を指定しないので、読み込み直後に大きさが跳ねることもない。
+  const displayWidth = isFitAll || baseWidth === 0 ? undefined : baseWidth * scale
   const percent = Math.round(scale * 100)
+  /** 「幅に合わせる」でどれだけ拡大すればよいか */
+  const widthScale = baseWidth > 0 ? stageSize.width / baseWidth : 1
 
   return (
     <div className="viewer" ref={viewerRef}>
-      <div
-        ref={stageRef}
-        className="viewer__stage"
-        onMouseDown={onMouseDown}
-        onDoubleClick={() => setScale(1)}
-      >
-        {image && (
-          <img
-            className="viewer__image"
-            src={imageUrl(image)}
-            alt={image.fileName}
-            style={displayWidth !== undefined ? { width: `${displayWidth}px` } : undefined}
-            draggable={false}
-          />
+      {/*
+        ページ送りの領域はこの入れ物の中だけに収める。
+        .viewer 直下に置くと、絶対配置なので下のバー (✕ など) まで覆ってしまう。
+      */}
+      <div className="viewer__canvas">
+        <div
+          ref={stageRef}
+          className="viewer__stage"
+          onMouseDown={onMouseDown}
+          onDoubleClick={() => setScale(1)}
+        >
+          {image && (
+            <img
+              className={`viewer__image${isFitAll ? ' viewer__image--fit' : ''}`}
+              src={imageUrl(image)}
+              alt={image.fileName}
+              style={displayWidth !== undefined ? { width: `${displayWidth}px` } : undefined}
+              onLoad={(event) =>
+                setNatural({
+                  width: event.currentTarget.naturalWidth,
+                  height: event.currentTarget.naturalHeight
+                })
+              }
+              draggable={false}
+            />
+          )}
+        </div>
+
+        {/* 全体表示のときだけ、左右端のクリックでページ送りできるようにする */}
+        {isFitAll && (
+          <>
+            <button
+              type="button"
+              className="viewer__edge viewer__edge--prev"
+              style={{ width: `${edgeRatio * 100}%` }}
+              onClick={() => step(-1)}
+              disabled={viewerIndex === 0}
+              aria-label="前の画像"
+            >
+              <span className="viewer__arrow">‹</span>
+            </button>
+            <button
+              type="button"
+              className="viewer__edge viewer__edge--next"
+              style={{ width: `${edgeRatio * 100}%` }}
+              onClick={() => step(1)}
+              disabled={viewerIndex >= ids.length - 1}
+              aria-label="次の画像"
+            >
+              <span className="viewer__arrow">›</span>
+            </button>
+          </>
         )}
       </div>
-
-      {/* fit-width のときだけ、左右端のクリックでページ送りできるようにする */}
-      {isFitWidth && (
-        <>
-          <button
-            type="button"
-            className="viewer__edge viewer__edge--prev"
-            style={{ width: `${edgeRatio * 100}%` }}
-            onClick={() => step(-1)}
-            disabled={viewerIndex === 0}
-            aria-label="前の画像"
-          >
-            <span className="viewer__arrow">‹</span>
-          </button>
-          <button
-            type="button"
-            className="viewer__edge viewer__edge--next"
-            style={{ width: `${edgeRatio * 100}%` }}
-            onClick={() => step(1)}
-            disabled={viewerIndex >= ids.length - 1}
-            aria-label="次の画像"
-          >
-            <span className="viewer__arrow">›</span>
-          </button>
-        </>
-      )}
 
       {/* 先読み用。表示はしないがブラウザキャッシュに載せておく */}
       <div className="viewer__preload" aria-hidden="true">
@@ -253,7 +301,12 @@ export default function ImageViewer(): React.JSX.Element | null {
       </div>
 
       <div className="viewer__bar">
-        <button type="button" className="button button--icon" onClick={closeViewer} title="一覧へ戻る (Esc)">
+        <button
+          type="button"
+          className="button button--icon"
+          onClick={closeViewer}
+          title="一覧へ戻る (Esc / マウスの戻るボタン)"
+        >
           ✕
         </button>
         <span className="viewer__name" title={image?.relPath}>
@@ -268,8 +321,17 @@ export default function ImageViewer(): React.JSX.Element | null {
           </span>
         )}
         <span className="viewer__meta">{percent}%</span>
-        {!isFitWidth && (
+        {!isFitAll && (
           <button type="button" className="button button--subtle" onClick={() => setScale(1)}>
+            全体を表示
+          </button>
+        )}
+        {Math.abs(widthScale - scale) > 0.001 && (
+          <button
+            type="button"
+            className="button button--subtle"
+            onClick={() => setScale(widthScale)}
+          >
             幅に合わせる
           </button>
         )}
