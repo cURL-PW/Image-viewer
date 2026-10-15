@@ -158,6 +158,30 @@ export class LibraryDb {
     return row?.path ?? null
   }
 
+  /** 登録済みのルートを、取り込み済みの枚数付きで登録順に返す。 */
+  listRoots(): { id: number; path: string; count: number }[] {
+    return this.db
+      .prepare(
+        `SELECT r.id AS id, r.path AS path,
+                (SELECT COUNT(*) FROM images i WHERE i.root_id = r.id) AS count
+           FROM roots r ORDER BY r.id`
+      )
+      .all() as { id: number; path: string; count: number }[]
+  }
+
+  /** ルートの登録を外す。画像とタグ付け結果も消える (実ファイルには触らない)。 */
+  removeRoot(rootId: number): void {
+    this.db.prepare('DELETE FROM roots WHERE id = ?').run(rootId)
+  }
+
+  /** 画像がどのルートに属するか。別ライブラリの ID で引かれたときに弾くために使う。 */
+  getImageRootId(id: number): number | null {
+    const row = this.stmt('SELECT root_id FROM images WHERE id = ?').get(id) as
+      | { root_id: number }
+      | undefined
+    return row?.root_id ?? null
+  }
+
   // --------------------------------------------------------------- images
 
   /**
@@ -416,6 +440,9 @@ export class LibraryDb {
 
   /** 推論結果を保存し、画像をスキャン済みにする。 */
   saveTags(imageId: number, modelId: string, tags: TagResult[]): void {
+    // 推論中に画像が消えた (ファイル削除やライブラリの登録解除)。
+    // そのまま書くと外部キー違反で例外になり、タグ付けのキューが止まる
+    if (!this.stmt('SELECT 1 FROM images WHERE id = ?').get(imageId)) return
     this.transaction(() => {
       this.db.prepare('DELETE FROM image_tags WHERE image_id = ?').run(imageId)
       const insert = this.db.prepare(

@@ -155,6 +155,11 @@ input {
   padding: 5px 9px;
 }
 
+.button--small {
+  padding: 2px 8px;
+  font-size: 11px;
+}
+
 .button--subtle {
   border-color: transparent;
   background: transparent;
@@ -205,6 +210,17 @@ select,
   flex-direction: column;
   min-height: 0;
   border-bottom: 1px solid var(--border);
+}
+
+.panel--libraries {
+  /* 数件なら中身の高さだけ取り、増えたらスクロールさせる。下のパネルに押し潰されないようにする */
+  flex: 0 0 auto;
+  max-height: 30%;
+}
+
+.panel--libraries .panel__body {
+  flex: 0 1 auto;
+  padding-bottom: 8px;
 }
 
 .panel--tree {
@@ -310,6 +326,82 @@ select,
   color: var(--text-dim);
   font-size: 11px;
   font-variant-numeric: tabular-nums;
+}
+
+/* -------------------------------------------------------------- libraries */
+
+.libraries {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.libraries__row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 4px 4px 8px;
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+
+.libraries__row:hover {
+  background: #24242c;
+}
+
+.libraries__row--active {
+  background: var(--accent-dim);
+}
+
+.libraries__row--active:hover {
+  background: var(--accent-dim);
+}
+
+.libraries__row--missing {
+  cursor: default;
+  color: var(--text-dim);
+}
+
+.libraries__name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.libraries__count,
+.libraries__missing {
+  color: var(--text-dim);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.libraries__missing {
+  color: var(--danger);
+}
+
+.libraries__remove {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  /* 一覧を静かに保つため、行に乗ったときだけ見せる */
+  visibility: hidden;
+}
+
+.libraries__row:hover .libraries__remove,
+.libraries__row:focus-within .libraries__remove,
+.libraries__row--missing .libraries__remove {
+  visibility: visible;
+}
+
+.libraries__remove:hover {
+  background: #3a2a2e;
+  color: var(--danger);
 }
 
 /* ------------------------------------------------------------------- tags */

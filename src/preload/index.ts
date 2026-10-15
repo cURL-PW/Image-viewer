@@ -14,6 +14,9 @@ function subscribe<T>(channel: string, listener: (payload: T) => void): () => vo
 const api: RendererApi = {
   openFolder: () => ipcRenderer.invoke(IPC.openFolder),
   getRoot: () => ipcRenderer.invoke(IPC.getRoot),
+  listLibraries: () => ipcRenderer.invoke(IPC.listLibraries),
+  switchLibrary: (id) => ipcRenderer.invoke(IPC.switchLibrary, id),
+  removeLibrary: (id) => ipcRenderer.invoke(IPC.removeLibrary, id),
   getTree: () => ipcRenderer.invoke(IPC.getTree),
   queryImages: (query) => ipcRenderer.invoke(IPC.queryImages, query),
   getImages: (ids) => ipcRenderer.invoke(IPC.getImages, ids),

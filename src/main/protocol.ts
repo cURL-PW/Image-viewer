@@ -38,6 +38,9 @@ export function createResolver(db: LibraryDb, library: Library) {
     const record = db.getImage(id)
     const rootPath = library.currentRootPath
     if (!record || !rootPath) return null
+    // ライブラリを切り替えた直後は、前のライブラリの ID で引かれることがある。
+    // 相対パスだけで解決すると、今のルートの別の画像を返してしまう
+    if (db.getImageRootId(id) !== library.currentRootId) return null
 
     const fullPath = path.resolve(rootPath, record.relPath)
     // パストラバーサル防止: ルート配下であることを必ず確認する

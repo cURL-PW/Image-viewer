@@ -2,6 +2,7 @@ import { useEffect } from 'react'
 import CloudBanner from './components/CloudBanner'
 import FolderTree from './components/FolderTree'
 import ImageViewer from './components/ImageViewer'
+import LibraryList from './components/LibraryList'
 import SettingsDialog from './components/SettingsDialog'
 import TagFilter from './components/TagFilter'
 import ThumbnailGrid from './components/ThumbnailGrid'
@@ -66,18 +67,21 @@ export default function App(): React.JSX.Element {
       <CloudBanner />
       <div className="app__body">
         <aside className="sidebar">
-          <FolderTree />
+          <LibraryList />
+          {/* ライブラリを切り替えたら開閉状態も初期化する */}
+          <FolderTree key={root?.id ?? 'none'} />
           <TagFilter />
         </aside>
         <main className="content">
           {!root ? (
             <div className="empty">
-              <p className="empty__title">フォルダが選択されていません</p>
+              <p className="empty__title">ライブラリが開かれていません</p>
               <p className="empty__hint">
-                画像の入ったフォルダを開くと、配下を再帰的に読み込みます。
+                画像の入ったフォルダをライブラリに追加すると、配下を再帰的に読み込みます。
+                複数のフォルダを登録して、左の一覧から切り替えられます。
               </p>
               <button type="button" className="button button--primary" onClick={() => void openFolder()}>
-                フォルダを開く
+                ライブラリを追加
               </button>
             </div>
           ) : viewerIndex === null ? (
