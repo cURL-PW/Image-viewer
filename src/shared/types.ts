@@ -248,6 +248,8 @@ export const IPC = {
   getImages: 'library:getImages',
   getImageInfo: 'library:getImageInfo',
   revealImage: 'library:revealImage',
+  openImageExternal: 'library:openImageExternal',
+  copyImage: 'library:copyImage',
   listTags: 'tags:list',
   scanControl: 'scan:control',
   getScanProgress: 'scan:getProgress',
@@ -269,6 +271,15 @@ export const IPC = {
   /** マウスの「戻る」ボタン (Windows の app-command 経由) */
   eventGoBack: 'event:goBack'
 } as const
+
+/**
+ * 右クリックメニューの「コピー」で何をクリップボードへ入れるか。
+ * - image: 画像そのもの (HEIC も PNG に変換して入れる)
+ * - path: フルパス
+ * - name: ファイル名
+ * - tags: 付与済みタグをカンマ区切りで
+ */
+export type CopyKind = 'image' | 'path' | 'name' | 'tags'
 
 export type ScanCommand = 'pause' | 'resume' | 'rescanAll' | 'retryErrors'
 

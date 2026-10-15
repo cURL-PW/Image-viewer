@@ -172,6 +172,7 @@ IMAGE_VIEWER_ROOT=/path/to/images npm run dev
 | ← / → , PageUp / PageDown | 前 / 次の画像へ |
 | Home / End | 先頭 / 末尾の画像へ |
 | Esc / マウスの戻るボタン | 一覧へ戻る |
+| 画像を右クリック | メニュー (開く / 既定のアプリで開く / エクスプローラーで表示 / 画像・パス・ファイル名・タグをコピー) |
 
 ### タグ絞り込み
 
