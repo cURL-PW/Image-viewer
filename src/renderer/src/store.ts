@@ -5,6 +5,7 @@ import type {
   ImageQuery,
   ImageRecord,
   IndexProgress,
+  LibraryInfo,
   RootInfo,
   ScanProgress,
   SortKey,
@@ -23,6 +24,8 @@ const TAGGED_DEBOUNCE = 1200
 
 interface State {
   root: RootInfo | null
+  /** 登録済みライブラリ */
+  libraries: LibraryInfo[]
   tree: FolderNode | null
   settings: AppSettings | null
 
@@ -58,6 +61,9 @@ interface State {
 interface Actions {
   init(): Promise<void>
   openFolder(): Promise<void>
+  switchLibrary(id: number): Promise<void>
+  removeLibrary(id: number): Promise<void>
+  refreshLibraries(): Promise<void>
   setDir(dir: string): void
   setRecursive(recursive: boolean): void
   setSort(sortKey: SortKey, sortOrder: SortOrder): void
@@ -126,8 +132,37 @@ export const useStore = create<State & Actions>((set, get) => {
     }
   }
 
+  let libraryToken = 0
+
+  /** 開いているライブラリが変わったときに、絞り込みと表示を初期状態へ戻して読み直す。 */
+  const applyRoot = async (root: RootInfo | null): Promise<void> => {
+    // 同じライブラリを選び直したときは、絞り込みを保つ
+    if (root !== null && root.id === get().root?.id) {
+      set({ root })
+      void get().refreshLibraries()
+      return
+    }
+    set({
+      root,
+      dir: '',
+      includeTags: [],
+      excludeTags: [],
+      images: {},
+      ids: [],
+      tags: [],
+      viewerIndex: null,
+      lastViewedIndex: null,
+      ...(root ? {} : { tree: null })
+    })
+    void get().refreshLibraries()
+    if (!root) return
+    await Promise.all([get().refreshTree(), get().refresh()])
+    void get().refreshTags()
+  }
+
   return {
     root: null,
+    libraries: [],
     tree: null,
     settings: null,
     dir: '',
@@ -166,11 +201,7 @@ export const useStore = create<State & Actions>((set, get) => {
         sortOrder: settings.sortOrder
       })
 
-      window.api.onRootChanged((next) => {
-        set({ root: next, dir: '', includeTags: [], excludeTags: [], images: {} })
-        scheduleRefresh()
-        void get().refreshTree()
-      })
+      window.api.onRootChanged((next) => void applyRoot(next))
 
       window.api.onLibraryChanged((change) => {
         // 削除された画像はキャッシュから落とす
@@ -197,13 +228,18 @@ export const useStore = create<State & Actions>((set, get) => {
           thumbEpoch: downloadFinished || cloudCleared ? state.thumbEpoch + 1 : state.thumbEpoch
         }))
       })
-      window.api.onIndexProgress((indexProgress) => set({ index: indexProgress }))
+      window.api.onIndexProgress((indexProgress) => {
+        // 走査が終わったら一覧の枚数を更新する
+        if (get().index.scanning && !indexProgress.scanning) void get().refreshLibraries()
+        set({ index: indexProgress })
+      })
       // マウスの「戻る」ボタン。単画像ビューを開いていれば一覧へ戻る
       window.api.onGoBack(() => {
         if (get().viewerIndex !== null) get().closeViewer()
       })
       window.api.onImageTagged(() => scheduleRefresh(TAGGED_DEBOUNCE))
 
+      void get().refreshLibraries()
       if (root) {
         await Promise.all([get().refreshTree(), get().refresh()])
         void get().refreshTags()
@@ -213,17 +249,29 @@ export const useStore = create<State & Actions>((set, get) => {
     async openFolder() {
       const root = await window.api.openFolder()
       if (!root) return
-      set({
-        root,
-        dir: '',
-        includeTags: [],
-        excludeTags: [],
-        images: {},
-        ids: [],
-        viewerIndex: null
-      })
-      await Promise.all([get().refreshTree(), get().refresh()])
-      void get().refreshTags()
+      await applyRoot(root)
+    },
+
+    async switchLibrary(id) {
+      if (get().root?.id === id) return
+      const root = await window.api.switchLibrary(id)
+      if (root?.id !== id) {
+        // 開けなかった (フォルダが見つからない等)。表示だけ最新にする
+        void get().refreshLibraries()
+        return
+      }
+      await applyRoot(root)
+    },
+
+    async removeLibrary(id) {
+      await applyRoot(await window.api.removeLibrary(id))
+    },
+
+    async refreshLibraries() {
+      const token = ++libraryToken
+      const libraries = await window.api.listLibraries()
+      if (token !== libraryToken) return
+      set({ libraries })
     },
 
     setDir(dir) {

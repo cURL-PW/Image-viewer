@@ -87,7 +87,7 @@ export default function FolderTree(): React.JSX.Element {
   return (
     <section className="panel panel--tree">
       <header className="panel__header">
-        <h2>ライブラリ</h2>
+        <h2>フォルダ</h2>
         <label className="panel__toggle" title="選択フォルダの配下も含めて表示する">
           <input
             type="checkbox"
@@ -103,7 +103,7 @@ export default function FolderTree(): React.JSX.Element {
             <TreeNode node={tree} depth={0} expanded={expanded} toggle={toggle} />
           </ul>
         ) : (
-          <p className="panel__placeholder">フォルダを開いてください</p>
+          <p className="panel__placeholder">ライブラリを追加してください</p>
         )}
       </div>
     </section>

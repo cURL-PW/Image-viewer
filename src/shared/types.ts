@@ -91,6 +91,20 @@ export interface RootInfo {
   indexed: boolean
 }
 
+/** 登録済みライブラリ (ルートフォルダ) の一覧の 1 件 */
+export interface LibraryInfo {
+  id: number
+  path: string
+  /** 表示名 (フォルダ名) */
+  name: string
+  /** 取り込み済みの画像枚数 */
+  count: number
+  /** フォルダが今も存在するか (外付けドライブを外した等で消えることがある) */
+  available: boolean
+  /** 現在開いているライブラリか */
+  active: boolean
+}
+
 /** 読み込み時間の記録。どの経路が遅いのかを診断で見せるために種別を持つ */
 export type ReadKind = 'stat' | 'thumbnail' | 'display'
 
@@ -226,6 +240,9 @@ export const AVAILABLE_MODELS = [
 export const IPC = {
   openFolder: 'library:openFolder',
   getRoot: 'library:getRoot',
+  listLibraries: 'library:list',
+  switchLibrary: 'library:switch',
+  removeLibrary: 'library:remove',
   getTree: 'library:getTree',
   queryImages: 'library:queryImages',
   getImages: 'library:getImages',

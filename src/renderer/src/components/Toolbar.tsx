@@ -64,7 +64,7 @@ export default function Toolbar(): React.JSX.Element {
   return (
     <header className="toolbar">
       <button type="button" className="button" onClick={() => void openFolder()}>
-        フォルダを開く
+        ライブラリを追加
       </button>
       <span className="toolbar__root" title={root?.path ?? ''}>
         {root?.path ?? '—'}

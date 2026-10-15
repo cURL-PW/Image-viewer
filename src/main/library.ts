@@ -226,6 +226,13 @@ export class Library extends EventEmitter<LibraryEvents> {
     return true
   }
 
+  /** ルートを閉じ、何も開いていない状態へ戻す (開いているライブラリの登録を外したとき)。 */
+  async close(): Promise<void> {
+    await this.stop()
+    this.rootId = null
+    this.rootPath = null
+  }
+
   async stop(): Promise<void> {
     this.generation++
     if (this.flushTimer) {

@@ -57,6 +57,15 @@ export async function openRoot(ctx: AppContext, rootPath: string): Promise<numbe
   return rootId
 }
 
+/** 開いているライブラリを閉じ、何も開いていない状態にする。 */
+export async function closeRoot(ctx: AppContext): Promise<void> {
+  await ctx.library.close()
+  ctx.guard.reset(false)
+  ctx.guard.setPlaceholderIndex(null)
+  ctx.db.setSetting(LAST_ROOT_KEY, '')
+  ctx.tagger.notifyLibraryChanged()
+}
+
 /**
  * ファイル属性による未ダウンロード一覧を作り直す。
  * Windows 以外や PowerShell が使えない環境では null になり、

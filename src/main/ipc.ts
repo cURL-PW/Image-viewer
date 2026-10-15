@@ -1,3 +1,4 @@
+import { statSync } from 'node:fs'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { BrowserWindow, dialog, ipcMain, shell } from 'electron'
@@ -9,13 +10,14 @@ import {
   type ImageQuery,
   type ImageRecord,
   type ImageTag,
+  type LibraryInfo,
   type RootInfo,
   type ScanCommand,
   type ScanProgress,
   type TagInfo,
   type CloudDiagnostics
 } from '@shared/types'
-import { openRoot, type AppContext } from './context'
+import { closeRoot, cloudModeKey, openRoot, type AppContext } from './context'
 
 export interface ImageInfoResult {
   image: ImageRecord | null
@@ -37,6 +39,26 @@ function currentRoot(ctx: AppContext): RootInfo | null {
   return { id, path: rootPath, indexed: !ctx.library.isIndexing }
 }
 
+function isDirectory(target: string): boolean {
+  try {
+    return statSync(target).isDirectory()
+  } catch {
+    return false
+  }
+}
+
+function listLibraries(ctx: AppContext): LibraryInfo[] {
+  const activeId = ctx.library.currentRootId
+  return ctx.db.listRoots().map((root) => ({
+    id: root.id,
+    path: root.path,
+    name: path.basename(root.path) || root.path,
+    count: root.count,
+    available: isDirectory(root.path),
+    active: root.id === activeId
+  }))
+}
+
 export function registerIpcHandlers(ctx: AppContext): void {
   ipcMain.handle(IPC.openFolder, async (event): Promise<RootInfo | null> => {
     const window = BrowserWindow.fromWebContents(event.sender)
@@ -50,6 +72,32 @@ export function registerIpcHandlers(ctx: AppContext): void {
   })
 
   ipcMain.handle(IPC.getRoot, (): RootInfo | null => currentRoot(ctx))
+
+  ipcMain.handle(IPC.listLibraries, (): LibraryInfo[] => listLibraries(ctx))
+
+  ipcMain.handle(IPC.switchLibrary, async (_event, id: number): Promise<RootInfo | null> => {
+    const rootPath = Number.isInteger(id) ? ctx.db.getRootPath(id) : null
+    if (rootPath === null || !isDirectory(rootPath)) return currentRoot(ctx)
+    if (id !== ctx.library.currentRootId) await openRoot(ctx, rootPath)
+    return currentRoot(ctx)
+  })
+
+  // 登録を外すだけで、フォルダの中身には触らない。開いていたものなら次の候補へ移る
+  ipcMain.handle(IPC.removeLibrary, async (_event, id: number): Promise<RootInfo | null> => {
+    const rootPath = Number.isInteger(id) ? ctx.db.getRootPath(id) : null
+    if (rootPath === null) return currentRoot(ctx)
+
+    if (id === ctx.library.currentRootId) {
+      await closeRoot(ctx)
+      const next = ctx.db.listRoots().find((root) => root.id !== id && isDirectory(root.path))
+      ctx.db.removeRoot(id)
+      if (next) await openRoot(ctx, next.path)
+    } else {
+      ctx.db.removeRoot(id)
+    }
+    ctx.db.setSetting(cloudModeKey(rootPath), '')
+    return currentRoot(ctx)
+  })
 
   ipcMain.handle(IPC.getTree, (): FolderNode | null => {
     const rootId = ctx.library.currentRootId
