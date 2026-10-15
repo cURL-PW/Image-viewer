@@ -45,6 +45,7 @@
     "directories": {
       "output": "release"
     },
+    "artifactName": "Image-Viewer-${version}-${os}-${arch}.${ext}",
     "files": [
       "out/**/*",
       "package.json"
@@ -73,6 +74,9 @@
         "AppImage"
       ],
       "category": "Graphics"
+    },
+    "nsis": {
+      "artifactName": "Image-Viewer-Setup-${version}-${arch}.${ext}"
     }
   }
 }
