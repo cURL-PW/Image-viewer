@@ -823,6 +823,33 @@ select,
   font-size: 11px;
 }
 
+.field__textarea {
+  display: block;
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--text);
+  font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  resize: vertical;
+  user-select: text;
+}
+
+.field__textarea:focus {
+  border-color: var(--accent-dim);
+  outline: none;
+}
+
+.field__errors {
+  margin: 5px 0 0;
+  padding-left: 18px;
+  color: var(--danger);
+  font-size: 11px;
+}
+
 /* ----------------------------------------------------------------- banner */
 
 .banner {

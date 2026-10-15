@@ -16,6 +16,8 @@ interface Item {
   label: string
   action: () => void | Promise<void>
   disabled?: boolean
+  /** ツールチップ */
+  hint?: string
 }
 
 type Entry = Item | 'separator'
@@ -24,7 +26,17 @@ const COPY_NOTICE: Record<CopyKind, string> = {
   image: '画像をコピーしました',
   path: 'パスをコピーしました',
   name: 'ファイル名をコピーしました',
-  tags: 'タグをコピーしました'
+  tags: 'タグをコピーしました',
+  tagsExcluded: '除外タグを除いてコピーしました'
+}
+
+/** コピーできなかったときの通知。タグは「全部除外された」こともあるので文言を分ける */
+const COPY_FAILED: Record<CopyKind, string> = {
+  image: 'コピーできませんでした',
+  path: 'コピーできませんでした',
+  name: 'コピーできませんでした',
+  tags: 'コピーするタグがありません',
+  tagsExcluded: 'コピーするタグがありません'
 }
 
 /**
@@ -37,6 +49,7 @@ export default function ImageContextMenu(): React.JSX.Element | null {
   const menu = useStore((state) => state.contextMenu)
   const close = useStore((state) => state.closeContextMenu)
   const viewerIndex = useStore((state) => state.viewerIndex)
+  const excludeCount = useStore((state) => state.settings?.copyExcludeTags.length ?? 0)
   const ref = useRef<HTMLDivElement>(null)
   const [position, setPosition] = useState<{ left: number; top: number } | null>(null)
   const [hasTags, setHasTags] = useState<boolean | null>(null)
@@ -102,7 +115,7 @@ export default function ImageContextMenu(): React.JSX.Element | null {
   const copy = async (kind: CopyKind): Promise<void> => {
     const state = useStore.getState()
     const ok = await window.api.copyImage(id, kind)
-    state.showNotice(ok ? COPY_NOTICE[kind] : 'コピーできませんでした')
+    state.showNotice(ok ? COPY_NOTICE[kind] : COPY_FAILED[kind])
   }
 
   const entries: Entry[] = []
@@ -124,7 +137,14 @@ export default function ImageContextMenu(): React.JSX.Element | null {
     { label: '画像をコピー', action: () => copy('image') },
     { label: 'パスをコピー', action: () => copy('path') },
     { label: 'ファイル名をコピー', action: () => copy('name') },
-    { label: 'タグをコピー', action: () => copy('tags'), disabled: hasTags !== true }
+    { label: 'タグをコピー', action: () => copy('tags'), disabled: hasTags !== true },
+    {
+      label: 'タグをコピー (除外あり)',
+      action: () => copy('tagsExcluded'),
+      disabled: hasTags !== true || excludeCount === 0,
+      // 除外ルールが無いと押せないので、どこで登録するかを示す
+      hint: excludeCount === 0 ? '設定の「コピーから除外するタグ」で登録すると使えます' : undefined
+    }
   )
   const items = entries.filter((entry): entry is Item => entry !== 'separator')
 
@@ -189,6 +209,7 @@ export default function ImageContextMenu(): React.JSX.Element | null {
             role="menuitem"
             className={`context-menu__item${current === active ? ' context-menu__item--active' : ''}`}
             disabled={entry.disabled}
+            title={entry.hint}
             onMouseEnter={() => setActive(current)}
             onMouseLeave={() => setActive(-1)}
             onClick={() => run(entry)}

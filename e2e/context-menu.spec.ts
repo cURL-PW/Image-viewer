@@ -95,10 +95,13 @@ test('一覧のサムネイルを右クリックするとメニューが出る',
     '画像をコピー',
     'パスをコピー',
     'ファイル名をコピー',
-    'タグをコピー'
+    'タグをコピー',
+    'タグをコピー (除外あり)'
   ])
   // タグ付け済みなので「タグをコピー」も押せる
   await expect(menuItem('タグをコピー')).toBeEnabled()
+  // 除外ルールを登録するまでは押せない
+  await expect(menuItem('タグをコピー (除外あり)')).toBeDisabled()
   // 右クリックで単画像ビューへ移ってはいけない
   await expect(window.locator('.grid')).toBeVisible()
   await menuItem('パスをコピー').hover()
@@ -221,4 +224,57 @@ test('キーボードで項目を選んで実行できる', async () => {
   await window.keyboard.press('Enter')
   await expect(menu()).toBeHidden()
   await expect.poll(readClipboardText).toBe(path.join(fixture.root, 'a', '01.png'))
+})
+
+async function setExcludeTags(lines: string[]): Promise<void> {
+  await window.locator('.toolbar .button--icon', { hasText: '⚙' }).click()
+  const field = window.locator('#exclude-tags')
+  await field.fill(lines.join('\n'))
+  // フォーカスが外れたときに保存する
+  await field.blur()
+  await expect
+    .poll(() => window.evaluate('window.api.getSettings().then((s) => s.copyExcludeTags)'))
+    .toEqual(lines.filter((line) => line.trim() !== '').map((line) => line.trim()))
+}
+
+test('登録した正規表現に一致するタグを除いてコピーする', async () => {
+  // a/01.png (赤) のタグは general / red_image / bright
+  await firstCell().click({ button: 'right' })
+  await menuItem('タグをコピー').click()
+  await expect.poll(readClipboardText).toBe('general, red_image, bright')
+
+  // タグ名そのままと正規表現の両方。大文字小文字は区別しない。壊れた行は無視される
+  await setExcludeTags(['general', '.*_IMAGE', '(broken'])
+  await expect(window.locator('.field__errors')).toContainText('(broken')
+  await window.locator('.field__errors').scrollIntoViewIfNeeded()
+  await expect(window.locator('.notice')).toHaveCount(0)
+  await window.screenshot({ path: `${SHOTS}/context-menu-exclude-settings.png` })
+  await window.locator('.modal__footer .button--primary').click()
+  await expect(window.locator('.modal')).toHaveCount(0)
+
+  await firstCell().click({ button: 'right' })
+  await expect(menuItem('タグをコピー (除外あり)')).toBeEnabled()
+  await menuItem('タグをコピー (除外あり)').hover()
+  await window.screenshot({ path: `${SHOTS}/context-menu-exclude-item.png` })
+  await menuItem('タグをコピー (除外あり)').click()
+  await expect(window.locator('.notice')).toHaveText('除外タグを除いてコピーしました')
+  await expect.poll(readClipboardText).toBe('bright')
+
+  // 全体一致なので、部分だけ一致するタグは残る
+  await setExcludeTags(['bri'])
+  await window.locator('.modal__footer .button--primary').click()
+  await firstCell().click({ button: 'right' })
+  await menuItem('タグをコピー (除外あり)').click()
+  await expect.poll(readClipboardText).toBe('general, red_image, bright')
+})
+
+test('すべてのタグが除外されたらコピーしない', async () => {
+  await setExcludeTags(['.*'])
+  await window.locator('.modal__footer .button--primary').click()
+  await app.evaluate(({ clipboard }) => clipboard.writeText('before'))
+
+  await firstCell().click({ button: 'right' })
+  await menuItem('タグをコピー (除外あり)').click()
+  await expect(window.locator('.notice')).toHaveText('コピーするタグがありません')
+  expect(await readClipboardText()).toBe('before')
 })

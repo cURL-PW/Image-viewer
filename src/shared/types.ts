@@ -212,6 +212,11 @@ export interface AppSettings {
   edgeClickRatio: number
   sortKey: SortKey
   sortOrder: SortOrder
+  /**
+   * 「タグをコピー (除外あり)」で取り除くタグ。1 件 1 正規表現で、タグ名全体に一致させる
+   * (照合は shared/tag-filter.ts)
+   */
+  copyExcludeTags: string[]
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -225,7 +230,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   thumbnailSize: 256,
   edgeClickRatio: 0.25,
   sortKey: 'path',
-  sortOrder: 'asc'
+  sortOrder: 'asc',
+  copyExcludeTags: []
 }
 
 export const AVAILABLE_MODELS = [
@@ -278,8 +284,9 @@ export const IPC = {
  * - path: フルパス
  * - name: ファイル名
  * - tags: 付与済みタグをカンマ区切りで
+ * - tagsExcluded: tags から、設定の copyExcludeTags に一致するものを除いたもの
  */
-export type CopyKind = 'image' | 'path' | 'name' | 'tags'
+export type CopyKind = 'image' | 'path' | 'name' | 'tags' | 'tagsExcluded'
 
 export type ScanCommand = 'pause' | 'resume' | 'rescanAll' | 'retryErrors'
 

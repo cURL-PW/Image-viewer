@@ -35,4 +35,12 @@ describe('normalizeSettings', () => {
     expect(normalizeSettings({ debugLog: undefined }).debugLog).toBe(true)
     expect(normalizeSettings({ debugLog: false }).debugLog).toBe(false)
   })
+
+  it('除外タグは文字列だけを残し、空のものは捨てる', () => {
+    expect(normalizeSettings({}).copyExcludeTags).toEqual([])
+    expect(
+      normalizeSettings({ copyExcludeTags: [' 1girl ', '', 3, '.*_hair'] as never }).copyExcludeTags
+    ).toEqual(['1girl', '.*_hair'])
+    expect(normalizeSettings({ copyExcludeTags: 'oops' as never }).copyExcludeTags).toEqual([])
+  })
 })

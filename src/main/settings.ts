@@ -2,6 +2,18 @@ import { DEFAULT_SETTINGS, type AppSettings } from '@shared/types'
 import type { LibraryDb } from './db'
 
 const KEY = 'app_settings'
+/** 除外タグの登録上限。設定ファイルが壊れていても膨らみすぎないように */
+const MAX_EXCLUDE_TAGS = 500
+const MAX_PATTERN_LENGTH = 500
+
+function normalizePatterns(input: unknown): string[] {
+  if (!Array.isArray(input)) return []
+  return input
+    .filter((value): value is string => typeof value === 'string')
+    .map((value) => value.trim())
+    .filter((value) => value !== '' && value.length <= MAX_PATTERN_LENGTH)
+    .slice(0, MAX_EXCLUDE_TAGS)
+}
 
 function clamp(value: number, min: number, max: number, fallback: number): number {
   if (typeof value !== 'number' || Number.isNaN(value)) return fallback
@@ -24,7 +36,9 @@ export function normalizeSettings(input: Partial<AppSettings>): AppSettings {
     sortKey: (['path', 'name', 'mtime', 'size'] as const).includes(input.sortKey as never)
       ? (input.sortKey as AppSettings['sortKey'])
       : DEFAULT_SETTINGS.sortKey,
-    sortOrder: input.sortOrder === 'desc' ? 'desc' : 'asc'
+    sortOrder: input.sortOrder === 'desc' ? 'desc' : 'asc',
+    // 正規表現として壊れているものも残す (設定画面で直せるように)。照合時に無視する
+    copyExcludeTags: normalizePatterns(input.copyExcludeTags)
   }
 }
 
@@ -53,7 +67,8 @@ export class SettingsStore {
   update(patch: Partial<AppSettings>): { settings: AppSettings; changed: (keyof AppSettings)[] } {
     const next = normalizeSettings({ ...this.cache, ...patch })
     const changed = (Object.keys(next) as (keyof AppSettings)[]).filter(
-      (key) => next[key] !== this.cache[key]
+      // 配列の項目もあるので中身で比べる
+      (key) => JSON.stringify(next[key]) !== JSON.stringify(this.cache[key])
     )
     this.cache = next
     this.db.setSetting(KEY, JSON.stringify(next))

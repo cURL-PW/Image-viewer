@@ -20,6 +20,7 @@ import {
 } from '@shared/types'
 import { closeRoot, cloudModeKey, openRoot, type AppContext } from './context'
 import { openImage } from './images'
+import { excludeTags } from '@shared/tag-filter'
 
 export interface ImageInfoResult {
   image: ImageRecord | null
@@ -160,8 +161,11 @@ export function registerIpcHandlers(ctx: AppContext): void {
       case 'name':
         clipboard.writeText(target.record.fileName)
         return true
-      case 'tags': {
-        const tags = ctx.db.getImageTags(id).map((tag) => tag.name)
+      case 'tags':
+      case 'tagsExcluded': {
+        const all = ctx.db.getImageTags(id).map((tag) => tag.name)
+        const tags =
+          kind === 'tagsExcluded' ? excludeTags(all, ctx.settings.get().copyExcludeTags) : all
         if (tags.length === 0) return false
         clipboard.writeText(tags.join(', '))
         return true
