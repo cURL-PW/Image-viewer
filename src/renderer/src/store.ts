@@ -45,6 +45,8 @@ interface State {
 
   /** null ならグリッド表示、数値ならその位置の画像を単画像表示 */
   viewerIndex: number | null
+  /** 最後に単画像ビューで見ていた位置。一覧へ戻ったとき、その画像が見えるようにする */
+  lastViewedIndex: number | null
 
   scan: ScanProgress
   index: IndexProgress
@@ -141,6 +143,7 @@ export const useStore = create<State & Actions>((set, get) => {
     tags: [],
     tagSearch: '',
     viewerIndex: null,
+    lastViewedIndex: null,
     scan: initialScan,
     index: { found: 0, scanning: false },
     settingsOpen: false,
@@ -349,7 +352,7 @@ export const useStore = create<State & Actions>((set, get) => {
     },
 
     closeViewer() {
-      set({ viewerIndex: null })
+      set({ viewerIndex: null, lastViewedIndex: get().viewerIndex })
     },
 
     step(delta) {

@@ -9,6 +9,12 @@ const CAPTION_HEIGHT = 24
 const OVERSCAN_ROWS = 2
 
 /**
+ * 単画像ビューを開くとグリッドは外される (App が出し分けている) ので、
+ * スクロール位置はコンポーネントの外に残しておき、戻ったときに復元する。
+ */
+let savedScroll: { dir: string; top: number } | null = null
+
+/**
  * 仮想スクロールのサムネイルグリッド。
  * 表示範囲の行だけを描画するので、数万枚でも DOM 数が一定に保たれる。
  */
@@ -25,6 +31,8 @@ export default function ThumbnailGrid(): React.JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null)
   const [viewport, setViewport] = useState({ width: 0, height: 0 })
   const [scrollTop, setScrollTop] = useState(0)
+  /** 前回のスクロール位置の復元が済んだか (マウント直後に一度だけ行う) */
+  const restoredRef = useRef(false)
 
   const cellHeight = thumbnailSize + CAPTION_HEIGHT
   const rowHeight = cellHeight + GAP
@@ -43,8 +51,11 @@ export default function ThumbnailGrid(): React.JSX.Element {
     return () => observer.disconnect()
   }, [])
 
-  // フォルダを切り替えたら先頭に戻す
+  // フォルダを切り替えたら先頭に戻す。
+  // 単画像ビューから戻ってきただけ (同じフォルダ) のときは下の復元に任せる。
   useEffect(() => {
+    if (savedScroll?.dir === dir) return
+    savedScroll = null
     containerRef.current?.scrollTo({ top: 0 })
     setScrollTop(0)
   }, [dir])
@@ -65,6 +76,27 @@ export default function ThumbnailGrid(): React.JSX.Element {
     return { startRow: first, endRow: last }
   }, [scrollTop, viewport.height, rowHeight, rowCount])
 
+  // 単画像ビューから戻ったら元のスクロール位置に戻す。
+  // 列数は幅が分かるまで決まらないので、幅を測り終えてから一度だけ行う。
+  useLayoutEffect(() => {
+    const element = containerRef.current
+    if (!element || restoredRef.current || viewport.width === 0) return
+    restoredRef.current = true
+    if (savedScroll?.dir !== dir) return
+
+    let top = savedScroll.top
+    // ページ送りで別の画像まで進んでいたら、その画像が見える位置までずらす
+    const { lastViewedIndex } = useStore.getState()
+    if (lastViewedIndex !== null && lastViewedIndex < ids.length) {
+      const cellTop = PADDING + Math.floor(lastViewedIndex / columns) * rowHeight
+      if (cellTop < top) top = cellTop - PADDING
+      else if (cellTop + cellHeight > top + viewport.height)
+        top = cellTop + cellHeight + PADDING - viewport.height
+    }
+    element.scrollTop = top
+    setScrollTop(element.scrollTop)
+  }, [viewport, dir, ids.length, columns, rowHeight, cellHeight])
+
   const visibleIds = useMemo(
     () => ids.slice(startRow * columns, endRow * columns),
     [ids, startRow, endRow, columns]
@@ -83,7 +115,11 @@ export default function ThumbnailGrid(): React.JSX.Element {
     <div
       ref={containerRef}
       className="grid"
-      onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}
+      onScroll={(event) => {
+        const top = event.currentTarget.scrollTop
+        setScrollTop(top)
+        savedScroll = { dir, top }
+      }}
     >
       {ids.length === 0 ? (
         <div className="empty">
