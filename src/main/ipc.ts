@@ -17,11 +17,14 @@ import {
   type TagInfo,
   type CloudDiagnostics,
   type CopyKind,
+  type SavedFilter,
+  type SavedFilterData,
   normalizeRotation
 } from '@shared/types'
 import { closeRoot, cloudModeKey, openRoot, type AppContext } from './context'
 import { openImage } from './images'
 import { excludeTags } from '@shared/tag-filter'
+import { sanitizeFilterData } from '@shared/saved-filter'
 
 export interface ImageInfoResult {
   image: ImageRecord | null
@@ -49,6 +52,25 @@ function isDirectory(target: string): boolean {
   } catch {
     return false
   }
+}
+
+function listSavedFilters(ctx: AppContext): SavedFilter[] {
+  const rootId = ctx.library.currentRootId
+  if (rootId === null) return []
+  return ctx.db.listSavedFilters(rootId).map((row) => {
+    let parsed: Partial<SavedFilterData> = {}
+    try {
+      parsed = JSON.parse(row.data) as Partial<SavedFilterData>
+    } catch {
+      // 壊れていても一覧からは消さない (名前は残し、条件は空として扱う)
+    }
+    return { id: row.id, name: row.name, data: sanitizeFilterData(parsed) }
+  })
+}
+
+/** 保存条件の名前。空なら保存しない */
+function filterName(name: unknown): string {
+  return typeof name === 'string' ? name.trim().slice(0, 100) : ''
 }
 
 function listLibraries(ctx: AppContext): LibraryInfo[] {
@@ -154,6 +176,41 @@ export function registerIpcHandlers(ctx: AppContext): void {
     return normalized
   })
 
+  ipcMain.handle(IPC.setFavorite, (_event, ids: number[], favorite: boolean): void => {
+    const rootId = ctx.library.currentRootId
+    if (rootId === null || !Array.isArray(ids)) return
+    ctx.db.setFavorite(rootId, ids, favorite === true)
+  })
+
+  ipcMain.handle(IPC.listSavedFilters, (): SavedFilter[] => listSavedFilters(ctx))
+
+  ipcMain.handle(
+    IPC.saveFilter,
+    (_event, name: string, data: SavedFilterData): SavedFilter[] => {
+      const rootId = ctx.library.currentRootId
+      const trimmed = filterName(name)
+      if (rootId !== null && trimmed !== '') {
+        ctx.db.addSavedFilter(rootId, trimmed, JSON.stringify(sanitizeFilterData(data)))
+      }
+      return listSavedFilters(ctx)
+    }
+  )
+
+  ipcMain.handle(IPC.renameSavedFilter, (_event, id: number, name: string): SavedFilter[] => {
+    const rootId = ctx.library.currentRootId
+    const trimmed = filterName(name)
+    if (rootId !== null && Number.isInteger(id) && trimmed !== '') {
+      ctx.db.renameSavedFilter(rootId, id, trimmed)
+    }
+    return listSavedFilters(ctx)
+  })
+
+  ipcMain.handle(IPC.deleteSavedFilter, (_event, id: number): SavedFilter[] => {
+    const rootId = ctx.library.currentRootId
+    if (rootId !== null && Number.isInteger(id)) ctx.db.deleteSavedFilter(rootId, id)
+    return listSavedFilters(ctx)
+  })
+
   ipcMain.handle(IPC.setFullScreen, (event, fullScreen: boolean): boolean => {
     const window = BrowserWindow.fromWebContents(event.sender)
     if (!window) return false
@@ -212,7 +269,13 @@ export function registerIpcHandlers(ctx: AppContext): void {
     const limit = Math.min(Math.max(request.limit ?? 300, 1), 2000)
     // 集計範囲はフォルダ選択のみ。タグ条件で絞ると、選択中の条件と共起しない
     // タグが一覧から消えて選べなくなるため、件数もフォルダ基準で安定させる。
-    const scope = { ...request.query, includeTags: [], excludeTags: [] }
+    const scope = {
+      ...request.query,
+      includeTags: [],
+      excludeTags: [],
+      search: '',
+      favoritesOnly: false
+    }
     const found = ctx.db.listTags(rootId, scope, limit)
 
     // 選択中タグが結果に含まれていなければ足しておく (解除できなくなるのを防ぐ)

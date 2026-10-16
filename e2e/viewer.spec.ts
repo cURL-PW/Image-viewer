@@ -45,7 +45,7 @@ test.beforeEach(async () => {
     await window.keyboard.press('Escape')
     await expect(window.locator('.grid')).toBeVisible()
   }
-  const subfolders = window.locator('.panel__toggle input')
+  const subfolders = window.locator('.panel--tree .panel__toggle input')
   if (!(await subfolders.isChecked())) await subfolders.check()
   await folderRow('library').click()
 })
@@ -83,9 +83,9 @@ test('フォルダを選ぶと配下 (再帰) の画像だけに絞り込まれ�
   await expectImageCount(5)
 
   // サブフォルダを含めない設定にすると a 直下の 3 枚だけになる
-  await window.locator('.panel__toggle input').uncheck()
+  await window.locator('.panel--tree .panel__toggle input').uncheck()
   await expectImageCount(3)
-  await window.locator('.panel__toggle input').check()
+  await window.locator('.panel--tree .panel__toggle input').check()
   await expectImageCount(5)
 
   await folderRow('b').click()

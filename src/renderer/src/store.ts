@@ -8,6 +8,8 @@ import type {
   IndexProgress,
   LibraryInfo,
   RootInfo,
+  SavedFilter,
+  SavedFilterData,
   ScanProgress,
   SortKey,
   SortOrder,
@@ -15,6 +17,8 @@ import type {
   TagMode
 } from '@shared/types'
 
+/** ファイル名検索の入力が止まってから絞り込むまでの待ち時間 (ms) */
+const SEARCH_DEBOUNCE = 300
 /** ライブラリ変更後の再クエリをまとめるための待ち時間 (ms) */
 const REQUERY_DEBOUNCE = 250
 /**
@@ -37,6 +41,11 @@ interface State {
   tagMode: TagMode
   sortKey: SortKey
   sortOrder: SortOrder
+  /** ファイル名・パスの検索語 (入力欄の値) */
+  search: string
+  favoritesOnly: boolean
+  /** 今のライブラリに保存した絞り込み条件 */
+  savedFilters: SavedFilter[]
 
   /** 絞り込み結果の画像 ID を表示順に並べたもの */
   ids: number[]
@@ -87,6 +96,18 @@ interface Actions {
   clearTags(): void
   setTagMode(mode: TagMode): void
   setTagSearch(search: string): void
+  /** ファイル名・パス検索。入力が止まってから絞り込む */
+  setSearch(search: string): void
+  setFavoritesOnly(favoritesOnly: boolean): void
+  /** お気に入りを付け外しする (複数可) */
+  setFavorite(ids: number[], favorite: boolean): Promise<void>
+  refreshSavedFilters(): Promise<void>
+  /** 今の条件を名前を付けて保存する */
+  saveFilter(name: string): Promise<void>
+  /** 保存した条件を当てる。フォルダは今のまま */
+  applySavedFilter(filter: SavedFilter): void
+  renameSavedFilter(id: number, name: string): Promise<void>
+  deleteSavedFilter(id: number): Promise<void>
   refresh(): Promise<void>
   refreshTree(): Promise<void>
   refreshTags(): Promise<void>
@@ -122,6 +143,9 @@ const initialScan: ScanProgress = {
 
 export const useStore = create<State & Actions>((set, get) => {
   let requeryTimer: ReturnType<typeof setTimeout> | null = null
+  let searchTimer: ReturnType<typeof setTimeout> | null = null
+  /** クエリに使う検索語。入力欄の値 (state.search) から遅れて追いつく */
+  let appliedSearch = ''
   // 非同期の応答が追い越されたときに、古い結果で上書きしないための世代番号
   let queryToken = 0
   let tagToken = 0
@@ -149,8 +173,15 @@ export const useStore = create<State & Actions>((set, get) => {
       excludeTags: state.excludeTags,
       tagMode: state.tagMode,
       sortKey: state.sortKey,
-      sortOrder: state.sortOrder
+      sortOrder: state.sortOrder,
+      search: appliedSearch,
+      favoritesOnly: state.favoritesOnly
     }
+  }
+
+  const cancelSearchTimer = (): void => {
+    if (searchTimer) clearTimeout(searchTimer)
+    searchTimer = null
   }
 
   let libraryToken = 0
@@ -163,11 +194,16 @@ export const useStore = create<State & Actions>((set, get) => {
       void get().refreshLibraries()
       return
     }
+    cancelSearchTimer()
+    appliedSearch = ''
     set({
       root,
       dir: '',
       includeTags: [],
       excludeTags: [],
+      search: '',
+      favoritesOnly: false,
+      savedFilters: [],
       images: {},
       ids: [],
       tags: [],
@@ -177,6 +213,7 @@ export const useStore = create<State & Actions>((set, get) => {
     })
     void get().refreshLibraries()
     if (!root) return
+    void get().refreshSavedFilters()
     await Promise.all([get().refreshTree(), get().refresh()])
     void get().refreshTags()
   }
@@ -193,6 +230,9 @@ export const useStore = create<State & Actions>((set, get) => {
     tagMode: 'and',
     sortKey: 'path',
     sortOrder: 'asc',
+    search: '',
+    favoritesOnly: false,
+    savedFilters: [],
     ids: [],
     images: {},
     loading: false,
@@ -266,6 +306,7 @@ export const useStore = create<State & Actions>((set, get) => {
 
       void get().refreshLibraries()
       if (root) {
+        void get().refreshSavedFilters()
         await Promise.all([get().refreshTree(), get().refresh()])
         void get().refreshTags()
       }
@@ -358,6 +399,85 @@ export const useStore = create<State & Actions>((set, get) => {
     setTagSearch(tagSearch) {
       set({ tagSearch })
       void get().refreshTags()
+    },
+
+    setSearch(search) {
+      set({ search })
+      cancelSearchTimer()
+      searchTimer = setTimeout(() => {
+        searchTimer = null
+        if (appliedSearch === search) return
+        appliedSearch = search
+        set({ viewerIndex: null })
+        void get().refresh()
+      }, SEARCH_DEBOUNCE)
+    },
+
+    setFavoritesOnly(favoritesOnly) {
+      set({ favoritesOnly, viewerIndex: null })
+      void get().refresh()
+    },
+
+    async setFavorite(ids, favorite) {
+      if (ids.length === 0) return
+      // 先に表示へ反映する
+      set((state) => {
+        const images = { ...state.images }
+        for (const id of ids) {
+          const image = images[id]
+          if (image) images[id] = { ...image, favorite }
+        }
+        return { images }
+      })
+      await window.api.setFavorite(ids, favorite)
+      // お気に入りだけを表示中なら、外したものが一覧から消える。
+      // 単画像ビューで見ている 1 枚は refresh が近くの画像へ寄せる
+      if (get().favoritesOnly) void get().refresh()
+    },
+
+    async refreshSavedFilters() {
+      set({ savedFilters: await window.api.listSavedFilters() })
+    },
+
+    async saveFilter(name) {
+      const state = get()
+      const data: SavedFilterData = {
+        includeTags: state.includeTags,
+        excludeTags: state.excludeTags,
+        tagMode: state.tagMode,
+        search: state.search,
+        favoritesOnly: state.favoritesOnly,
+        sortKey: state.sortKey,
+        sortOrder: state.sortOrder
+      }
+      set({ savedFilters: await window.api.saveFilter(name, data) })
+    },
+
+    applySavedFilter(filter) {
+      const { data } = filter
+      cancelSearchTimer()
+      appliedSearch = data.search
+      set({
+        includeTags: data.includeTags,
+        excludeTags: data.excludeTags,
+        tagMode: data.tagMode,
+        search: data.search,
+        favoritesOnly: data.favoritesOnly,
+        sortKey: data.sortKey,
+        sortOrder: data.sortOrder,
+        viewerIndex: null
+      })
+      void window.api.setSettings({ sortKey: data.sortKey, sortOrder: data.sortOrder })
+      void get().refresh()
+      void get().refreshTags()
+    },
+
+    async renameSavedFilter(id, name) {
+      set({ savedFilters: await window.api.renameSavedFilter(id, name) })
+    },
+
+    async deleteSavedFilter(id) {
+      set({ savedFilters: await window.api.deleteSavedFilter(id) })
     },
 
     async refresh() {

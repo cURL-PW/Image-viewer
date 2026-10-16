@@ -49,6 +49,7 @@ export default function ImageContextMenu(): React.JSX.Element | null {
   const menu = useStore((state) => state.contextMenu)
   const close = useStore((state) => state.closeContextMenu)
   const viewerIndex = useStore((state) => state.viewerIndex)
+  const images = useStore((state) => state.images)
   const excludeCount = useStore((state) => state.settings?.copyExcludeTags.length ?? 0)
   const ref = useRef<HTMLDivElement>(null)
   const [position, setPosition] = useState<{ left: number; top: number } | null>(null)
@@ -118,6 +119,8 @@ export default function ImageContextMenu(): React.JSX.Element | null {
     state.showNotice(ok ? COPY_NOTICE[kind] : COPY_FAILED[kind])
   }
 
+  const favorite = images[id]?.favorite ?? false
+
   const entries: Entry[] = []
   // 単画像ビューでは今まさに開いているので出さない
   if (viewerIndex === null) {
@@ -133,6 +136,10 @@ export default function ImageContextMenu(): React.JSX.Element | null {
   entries.push(
     { label: '既定のアプリで開く', action: () => window.api.openImageExternal(id) },
     { label: revealLabel(window.api.platform), action: () => window.api.revealImage(id) },
+    {
+      label: favorite ? 'お気に入りから外す' : 'お気に入りに追加',
+      action: () => useStore.getState().setFavorite([id], !favorite)
+    },
     'separator',
     { label: '画像をコピー', action: () => copy('image') },
     { label: 'パスをコピー', action: () => copy('path') },

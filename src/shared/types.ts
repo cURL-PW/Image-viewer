@@ -40,6 +40,8 @@ export interface ImageRecord {
   scanError: string | null
   /** 表示上の回転 (時計回りの度数: 0 / 90 / 180 / 270)。元ファイルは変えない */
   rotation: number
+  /** お気に入り (★) */
+  favorite: boolean
 }
 
 export interface FolderNode {
@@ -79,6 +81,34 @@ export interface ImageQuery {
   tagMode: TagMode
   sortKey: SortKey
   sortOrder: SortOrder
+  /**
+   * ファイル名・パスの検索語。ルートからの相対パスに部分一致 (大文字小文字は区別しない)。
+   * 空白区切りで複数語を入れると、すべてを含むものに絞る
+   */
+  search?: string
+  /** お気に入りだけに絞る */
+  favoritesOnly?: boolean
+}
+
+/**
+ * 保存した絞り込み条件の中身。
+ * フォルダは含めない (呼び出しても今見ているフォルダのまま条件だけを当てる)
+ */
+export interface SavedFilterData {
+  includeTags: number[]
+  excludeTags: number[]
+  tagMode: TagMode
+  search: string
+  favoritesOnly: boolean
+  sortKey: SortKey
+  sortOrder: SortOrder
+}
+
+/** 保存した絞り込み条件。ライブラリごとに持つ */
+export interface SavedFilter {
+  id: number
+  name: string
+  data: SavedFilterData
 }
 
 export interface QueryResult {
@@ -256,6 +286,11 @@ export const IPC = {
   getImages: 'library:getImages',
   getImageInfo: 'library:getImageInfo',
   setRotation: 'library:setRotation',
+  setFavorite: 'library:setFavorite',
+  listSavedFilters: 'filters:list',
+  saveFilter: 'filters:save',
+  renameSavedFilter: 'filters:rename',
+  deleteSavedFilter: 'filters:delete',
   setFullScreen: 'window:setFullScreen',
   revealImage: 'library:revealImage',
   openImageExternal: 'library:openImageExternal',

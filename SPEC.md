@@ -282,6 +282,31 @@ chokidar でルートフォルダを再帰 watch し、イベントを次のと�
 - 絞り込みは常に「フォルダ選択 ∩ タグ条件」で評価され、グリッドと単画像ビューのページ送り順の両方に適用される
 - 未スキャン画像の扱い: タグ条件が空のときは表示、タグ条件があるときは除外(スキャン完了に伴い順次出現)
 
+### 3.7 ファイル名・パス検索
+
+- ツールバーの検索欄。入力が止まって 300ms 後に絞り込む
+- ルートからの相対パス(フォルダ名を含む)に部分一致。大文字小文字は区別しない(SQLite の LIKE。ASCII のみ)
+- 空白(全角を含む)で区切ると、すべての語を含むものに絞る(AND)。`%` `_` は文字として扱う
+- フォルダ選択・タグ条件・お気に入りと組み合わさり、単画像ビューのページ送り順にも効く
+- ライブラリを切り替えると空に戻す。タグ一覧の件数は従来どおりフォルダ範囲だけで数える
+
+### 3.8 お気に入り(★)
+
+- サムネイルの右上(付いているものは常に、付いていないものはホバー時だけ表示)、単画像ビューのバー、
+  `F` キー、右クリックメニューで付け外しする。サムネイルの ★ を押しても単画像ビューは開かない
+- 1 段階のみ。DB (`images.favorite`) に保存する。ファイルの内容が変わっても残すが、
+  名前の変更・移動では別画像として扱うので外れる
+- サイドバーの「★ お気に入りのみ」で絞り込む。絞り込み中に外したものは一覧から消える
+
+### 3.9 絞り込み条件の保存
+
+- サイドバーの「保存した条件」。「＋ 今の条件を保存」で名前を付けて保存し、クリックで呼び出す
+- 保存する中身: 含むタグ・除外タグ・AND/OR・ファイル名検索・お気に入りのみ・並び順。
+  **フォルダは含めない**(呼び出しても今見ているフォルダのまま、条件だけを当てる)
+- 右クリックで「名前を変更」「削除」(削除は確認あり)
+- ライブラリごとに保存する(`saved_filters.root_id`)。ライブラリの登録を外すと一緒に消える
+- 保存内容は main 側で決まった形に揃えてから保存し、読み出し時も同じく揃える(壊れた値は既定に戻す)
+
 ## 4. アーキテクチャ
 
 ### 4.1 プロセス構成
@@ -324,6 +349,8 @@ chokidar でルートフォルダを再帰 watch し、イベントを次のと�
 | `library:openImageExternal` | R→M | OS の既定アプリで画像を開く |
 | `library:copyImage` | R→M | 画像 / パス / ファイル名 / タグをクリップボードへ |
 | `tags:list` | R→M | タグ一覧(スコープ内出現数付き、検索文字列) |
+| `library:setFavorite` | R→M | お気に入りの付け外し(複数可) |
+| `filters:list / save / rename / delete` | R→M | 保存した絞り込み条件(今のライブラリ分) |
 | `scan:control` | R→M | スキャン一時停止 / 再開 / 再スキャン指示 |
 | `settings:get / set` | R→M | しきい値・モデル・プロバイダ等 |
 | `event:libraryChanged` | M→R | 追加/変更/削除の差分通知(watch 由来) |
@@ -347,6 +374,7 @@ CREATE TABLE images (
   scanned_model TEXT,                -- タグ付け済みモデル ID(NULL = 未スキャン)
   scan_error TEXT,
   rotation   INTEGER NOT NULL DEFAULT 0, -- 表示上の回転(v2 で追加)
+  favorite   INTEGER NOT NULL DEFAULT 0, -- お気に入り(v3 で追加)
   UNIQUE (root_id, rel_path)
 );
 
@@ -369,6 +397,14 @@ CREATE TABLE roots (
 );
 
 CREATE TABLE settings ( key TEXT PRIMARY KEY, value TEXT );
+
+-- v3 で追加。条件は JSON (SavedFilterData)
+CREATE TABLE saved_filters (
+  id      INTEGER PRIMARY KEY,
+  root_id INTEGER NOT NULL REFERENCES roots(id) ON DELETE CASCADE,
+  name    TEXT NOT NULL,
+  data    TEXT NOT NULL
+);
 
 CREATE INDEX idx_images_dir      ON images(root_id, dir_path);
 CREATE INDEX idx_image_tags_tag  ON image_tags(tag_id);

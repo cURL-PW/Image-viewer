@@ -59,6 +59,7 @@ export default function ImageViewer(): React.JSX.Element | null {
   const fullScreen = useStore((state) => state.fullScreen)
   const setFullScreen = useStore((state) => state.setFullScreen)
   const rotate = useStore((state) => state.rotate)
+  const setFavorite = useStore((state) => state.setFavorite)
 
   const viewerRef = useRef<HTMLDivElement>(null)
   const stageRef = useRef<HTMLDivElement>(null)
@@ -429,6 +430,20 @@ export default function ImageViewer(): React.JSX.Element | null {
             </button>
           )}
           <div className="toolbar__spacer" />
+          {image && (
+            <button
+              type="button"
+              className={`button button--icon viewer__star${
+                image.favorite ? ' viewer__star--on' : ''
+              }`}
+              onClick={() => void setFavorite([currentId], !image.favorite)}
+              title={image.favorite ? 'お気に入りから外す (F)' : 'お気に入りに追加 (F)'}
+              aria-label={image.favorite ? 'お気に入りから外す' : 'お気に入りに追加'}
+              aria-pressed={image.favorite}
+            >
+              {image.favorite ? '★' : '☆'}
+            </button>
+          )}
           <button
             type="button"
             className="button button--icon"

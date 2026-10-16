@@ -4,6 +4,7 @@ import FolderTree from './components/FolderTree'
 import ImageContextMenu from './components/ImageContextMenu'
 import ImageViewer from './components/ImageViewer'
 import LibraryList from './components/LibraryList'
+import SavedFilters from './components/SavedFilters'
 import Notice from './components/Notice'
 import SettingsDialog from './components/SettingsDialog'
 import TagFilter from './components/TagFilter'
@@ -57,6 +58,13 @@ export default function App(): React.JSX.Element {
           if (event.ctrlKey || event.metaKey || event.altKey) return
           void state.rotate(currentId, event.shiftKey ? -1 : 1)
           break
+        case 'f':
+        case 'F': {
+          if (event.ctrlKey || event.metaKey || event.altKey) return
+          const image = state.images[currentId]
+          if (image) void state.setFavorite([currentId], !image.favorite)
+          break
+        }
         case 'ArrowRight':
         case 'PageDown':
           state.step(1)
@@ -93,6 +101,7 @@ export default function App(): React.JSX.Element {
           <LibraryList />
           {/* ライブラリを切り替えたら開閉状態も初期化する */}
           <FolderTree key={root?.id ?? 'none'} />
+          <SavedFilters />
           <TagFilter />
         </aside>
         <main className="content">

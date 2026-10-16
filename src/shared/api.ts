@@ -11,6 +11,8 @@ import type {
   IndexProgress,
   LibraryChange,
   RootInfo,
+  SavedFilter,
+  SavedFilterData,
   ScanCommand,
   ScanProgress,
   TagInfo
@@ -47,6 +49,13 @@ export interface RendererApi {
   setRotation(id: number, rotation: number): Promise<number>
   /** ウィンドウの全画面を切り替える。切り替え後の状態を返す */
   setFullScreen(fullScreen: boolean): Promise<boolean>
+  /** お気に入りを付け外しする。今のライブラリの画像だけが対象 */
+  setFavorite(ids: number[], favorite: boolean): Promise<void>
+  /** 今のライブラリに保存した絞り込み条件 (保存順) */
+  listSavedFilters(): Promise<SavedFilter[]>
+  saveFilter(name: string, data: SavedFilterData): Promise<SavedFilter[]>
+  renameSavedFilter(id: number, name: string): Promise<SavedFilter[]>
+  deleteSavedFilter(id: number): Promise<SavedFilter[]>
   /** OS の既定のアプリで開く */
   openImageExternal(id: number): Promise<void>
   /** 画像やパスをクリップボードへ入れる。入れるものが無ければ false */

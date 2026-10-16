@@ -28,6 +28,7 @@ export default function ThumbnailGrid(): React.JSX.Element {
   const dir = useStore((state) => state.dir)
   const thumbnailSize = useStore((state) => state.settings?.thumbnailSize ?? 256)
   const thumbEpoch = useStore((state) => state.thumbEpoch)
+  const setFavorite = useStore((state) => state.setFavorite)
 
   const containerRef = useRef<HTMLDivElement>(null)
   const [viewport, setViewport] = useState({ width: 0, height: 0 })
@@ -174,6 +175,23 @@ export default function ThumbnailGrid(): React.JSX.Element {
                       loading="lazy"
                       draggable={false}
                     />
+                  )}
+                  {image && (
+                    <button
+                      type="button"
+                      className={`cell__star${image.favorite ? ' cell__star--on' : ''}`}
+                      title={image.favorite ? 'お気に入りから外す' : 'お気に入りに追加'}
+                      aria-label={image.favorite ? 'お気に入りから外す' : 'お気に入りに追加'}
+                      aria-pressed={image.favorite}
+                      // セルのクリックは単画像ビューを開くので、ここで止める
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        void setFavorite([id], !image.favorite)
+                      }}
+                      onDoubleClick={(event) => event.stopPropagation()}
+                    >
+                      {image.favorite ? '★' : '☆'}
+                    </button>
                   )}
                 </div>
                 <div className="cell__caption">{image?.fileName ?? ''}</div>

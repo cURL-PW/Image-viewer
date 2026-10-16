@@ -100,6 +100,13 @@ input {
   white-space: nowrap;
 }
 
+/* .input の width: 100% より優先させる */
+.input.toolbar__search {
+  flex: 0 1 220px;
+  width: 220px;
+  min-width: 120px;
+}
+
 .toolbar__field {
   display: flex;
   align-items: center;
@@ -225,6 +232,54 @@ select,
 
 .panel--tree {
   flex: 1 1 45%;
+}
+
+.panel--presets {
+  /* 数件なら中身の高さだけ。増えたらスクロールさせる */
+  flex: 0 0 auto;
+  max-height: 28%;
+}
+
+.panel--presets .panel__body {
+  flex: 0 1 auto;
+}
+
+.presets {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.presets__row {
+  display: block;
+  width: 100%;
+  overflow: hidden;
+  padding: 3px 6px;
+  border: 0;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.presets__row:hover {
+  background: #24242c;
+}
+
+.presets__row--editing {
+  padding: 1px 0;
+}
+
+.presets__add {
+  padding: 2px 0;
+}
+
+.presets__save {
+  margin-top: 2px;
 }
 
 .panel--tags {
@@ -567,6 +622,7 @@ select,
 }
 
 .cell__frame {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -579,6 +635,43 @@ select,
   max-width: 100%;
   max-height: 100%;
   object-fit: contain;
+}
+
+/* お気に入りの ★。付いているものは常に、付いていないものはホバー時だけ出す */
+.cell__star {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: rgb(0 0 0 / 55%);
+  color: #c9c9d4;
+  font-size: 16px;
+  line-height: 26px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.1s ease;
+}
+
+.cell:hover .cell__star,
+.cell__star:focus-visible {
+  opacity: 1;
+}
+
+.cell__star--on {
+  color: #f5c84b;
+  opacity: 1;
+}
+
+.cell__star:hover {
+  background: rgb(0 0 0 / 75%);
+}
+
+.viewer__star--on {
+  color: #f5c84b;
 }
 
 .cell__caption {
@@ -1035,6 +1128,11 @@ select,
   font: inherit;
   text-align: left;
   cursor: default;
+}
+
+/* 保存した条件のメニューは選択状態を持たないので、ホバーで示す */
+.panel--presets .context-menu__item:hover {
+  background: var(--accent-dim);
 }
 
 .context-menu__item--active {

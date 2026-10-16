@@ -34,7 +34,7 @@ export interface TagResult {
   confidence: number
 }
 
-const SCHEMA_VERSION = 2
+const SCHEMA_VERSION = 3
 
 /**
  * ファイル名中の数字列をゼロ埋めして自然順ソート用のキーを作る。
@@ -93,6 +93,20 @@ export class LibraryDb {
     if (version < 1) this.createBaseTables()
     // v2: 画像ごとの表示上の回転
     if (version < 2) this.addColumn('images', 'rotation', 'INTEGER NOT NULL DEFAULT 0')
+    // v3: お気に入りと、保存した絞り込み条件
+    if (version < 3) {
+      this.addColumn('images', 'favorite', 'INTEGER NOT NULL DEFAULT 0')
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS saved_filters (
+          id      INTEGER PRIMARY KEY,
+          root_id INTEGER NOT NULL REFERENCES roots(id) ON DELETE CASCADE,
+          name    TEXT NOT NULL,
+          data    TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_saved_filters_root ON saved_filters(root_id);
+        CREATE INDEX IF NOT EXISTS idx_images_favorite    ON images(root_id, favorite);
+      `)
+    }
     this.db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`)
   }
 
@@ -340,6 +354,42 @@ export class LibraryDb {
     this.db.prepare('UPDATE images SET rotation = ? WHERE id = ?').run(rotation, id)
   }
 
+  /** お気に入りを付け外しする。別ライブラリの画像は触らない。ファイルの内容が変わっても残す */
+  setFavorite(rootId: number, ids: number[], favorite: boolean): void {
+    const targets = intList(ids)
+    if (targets.length === 0) return
+    this.transaction(() => {
+      const statement = this.stmt('UPDATE images SET favorite = ? WHERE id = ? AND root_id = ?')
+      for (const id of targets) statement.run(favorite ? 1 : 0, id, rootId)
+    })
+  }
+
+  // -------------------------------------------------------- saved filters
+
+  listSavedFilters(rootId: number): { id: number; name: string; data: string }[] {
+    return this.db
+      .prepare('SELECT id, name, data FROM saved_filters WHERE root_id = ? ORDER BY id')
+      .all(rootId) as { id: number; name: string; data: string }[]
+  }
+
+  addSavedFilter(rootId: number, name: string, data: string): number {
+    return Number(
+      this.db
+        .prepare('INSERT INTO saved_filters (root_id, name, data) VALUES (?, ?, ?)')
+        .run(rootId, name, data).lastInsertRowid
+    )
+  }
+
+  renameSavedFilter(rootId: number, id: number, name: string): void {
+    this.db
+      .prepare('UPDATE saved_filters SET name = ? WHERE id = ? AND root_id = ?')
+      .run(name, id, rootId)
+  }
+
+  deleteSavedFilter(rootId: number, id: number): void {
+    this.db.prepare('DELETE FROM saved_filters WHERE id = ? AND root_id = ?').run(id, rootId)
+  }
+
   // ---------------------------------------------------------------- query
 
   queryImageIds(rootId: number, query: ImageQuery): number[] {
@@ -560,7 +610,7 @@ export class LibraryDb {
 
 // ------------------------------------------------------------------ utils
 
-const IMAGE_COLUMNS = `id, rel_path, dir_path, file_name, mtime, size, width, height, scanned_model, scan_error, rotation`
+const IMAGE_COLUMNS = `id, rel_path, dir_path, file_name, mtime, size, width, height, scanned_model, scan_error, rotation, favorite`
 
 interface RawImage {
   id: number
@@ -574,6 +624,7 @@ interface RawImage {
   scanned_model: string | null
   scan_error: string | null
   rotation: number
+  favorite: number
 }
 
 function toImageRecord(row: RawImage): ImageRecord {
@@ -588,13 +639,19 @@ function toImageRecord(row: RawImage): ImageRecord {
     height: row.height,
     scannedModel: row.scanned_model,
     scanError: row.scan_error,
-    rotation: row.rotation
+    rotation: row.rotation,
+    favorite: row.favorite === 1
   }
 }
 
 /** LIKE のワイルドカードを無効化する (フォルダ名に % や _ が含まれる場合の対策)。 */
 function escapeLike(value: string): string {
   return value.replace(/[\\%_]/g, (char) => `\\${char}`)
+}
+
+/** 検索語を空白 (全角を含む) で区切る */
+export function searchTerms(search: string | undefined): string[] {
+  return (search ?? '').split(/[\s\u3000]+/).filter((term) => term !== '')
 }
 
 function intList(ids: number[]): number[] {
@@ -639,6 +696,14 @@ export function buildWhere(rootId: number, query: ImageQuery): { where: string; 
     clauses.push(`id NOT IN (SELECT image_id FROM image_tags WHERE tag_id IN (${placeholders}))`)
     params.push(...exclude)
   }
+
+  // ファイル名・パス検索。語ごとに AND。LIKE は ASCII の大文字小文字を区別しない
+  for (const term of searchTerms(query.search)) {
+    clauses.push(`rel_path LIKE ? ESCAPE '\\'`)
+    params.push(`%${escapeLike(term)}%`)
+  }
+
+  if (query.favoritesOnly) clauses.push('favorite = 1')
 
   // タグ条件がある間は、まだスキャンされていない画像は結果に含めない
   if (include.length > 0 || exclude.length > 0) {
