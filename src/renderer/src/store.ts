@@ -56,6 +56,18 @@ interface State {
   settingsOpen: boolean
   /** 未ダウンロードだったサムネイルを読み直させるための番号 */
   thumbEpoch: number
+  /** 画像の右クリックメニュー */
+  contextMenu: ContextMenuState | null
+  /** 画面下に一瞬だけ出す通知 (「コピーしました」など) */
+  notice: { text: string; key: number } | null
+}
+
+export interface ContextMenuState {
+  /** 表示位置 (クライアント座標) */
+  x: number
+  y: number
+  /** 対象の画像 ID。一覧が入れ替わっても取り違えないよう、位置ではなく ID で持つ */
+  id: number
 }
 
 interface Actions {
@@ -82,6 +94,9 @@ interface Actions {
   goTo(index: number): void
   updateSettings(patch: Partial<AppSettings>): Promise<void>
   setSettingsOpen(open: boolean): void
+  openContextMenu(menu: ContextMenuState): void
+  closeContextMenu(): void
+  showNotice(text: string): void
 }
 
 const initialScan: ScanProgress = {
@@ -183,6 +198,8 @@ export const useStore = create<State & Actions>((set, get) => {
     index: { found: 0, scanning: false },
     settingsOpen: false,
     thumbEpoch: 0,
+    contextMenu: null,
+    notice: null,
 
     async init() {
       if (initStarted) return
@@ -424,6 +441,18 @@ export const useStore = create<State & Actions>((set, get) => {
 
     setSettingsOpen(settingsOpen) {
       set({ settingsOpen })
+    },
+
+    openContextMenu(contextMenu) {
+      set({ contextMenu })
+    },
+
+    closeContextMenu() {
+      if (get().contextMenu !== null) set({ contextMenu: null })
+    },
+
+    showNotice(text) {
+      set({ notice: { text, key: Date.now() } })
     }
   }
 })

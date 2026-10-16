@@ -1,6 +1,7 @@
 import type {
   AppSettings,
   CloudDiagnostics,
+  CopyKind,
   DebugLogInfo,
   FolderNode,
   ImageQuery,
@@ -42,6 +43,12 @@ export interface RendererApi {
   getImages(ids: number[]): Promise<ImageRecord[]>
   getImageInfo(id: number): Promise<ImageInfo>
   revealImage(id: number): Promise<void>
+  /** OS の既定のアプリで開く */
+  openImageExternal(id: number): Promise<void>
+  /** 画像やパスをクリップボードへ入れる。入れるものが無ければ false */
+  copyImage(id: number, kind: CopyKind): Promise<boolean>
+  /** 実行中の OS (process.platform)。表示文言の出し分けに使う */
+  platform: string
   listTags(request: TagListRequest): Promise<TagInfo[]>
   scanControl(command: ScanCommand): Promise<ScanProgress>
   /** 指定フォルダ配下をまとめてダウンロードし、タグ付けの対象へ戻す */

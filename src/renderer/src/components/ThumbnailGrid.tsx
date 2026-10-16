@@ -23,6 +23,7 @@ export default function ThumbnailGrid(): React.JSX.Element {
   const images = useStore((state) => state.images)
   const ensureImages = useStore((state) => state.ensureImages)
   const openViewer = useStore((state) => state.openViewer)
+  const openContextMenu = useStore((state) => state.openContextMenu)
   const loading = useStore((state) => state.loading)
   const dir = useStore((state) => state.dir)
   const thumbnailSize = useStore((state) => state.settings?.thumbnailSize ?? 256)
@@ -153,6 +154,10 @@ export default function ThumbnailGrid(): React.JSX.Element {
                 onClick={(event) => {
                   // シングルクリックでも開けるようにする (ダブルクリックは従来どおり)
                   if (event.detail === 1) openViewer(index)
+                }}
+                onContextMenu={(event) => {
+                  event.preventDefault()
+                  openContextMenu({ x: event.clientX, y: event.clientY, id })
                 }}
                 title={image?.relPath ?? ''}
               >

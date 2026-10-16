@@ -1,8 +1,10 @@
 import { useEffect } from 'react'
 import CloudBanner from './components/CloudBanner'
 import FolderTree from './components/FolderTree'
+import ImageContextMenu from './components/ImageContextMenu'
 import ImageViewer from './components/ImageViewer'
 import LibraryList from './components/LibraryList'
+import Notice from './components/Notice'
 import SettingsDialog from './components/SettingsDialog'
 import TagFilter from './components/TagFilter'
 import ThumbnailGrid from './components/ThumbnailGrid'
@@ -92,6 +94,8 @@ export default function App(): React.JSX.Element {
         </main>
       </div>
       {settingsOpen && <SettingsDialog />}
+      <ImageContextMenu />
+      <Notice />
     </div>
   )
 }

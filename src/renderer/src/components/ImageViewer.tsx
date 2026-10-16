@@ -49,6 +49,7 @@ export default function ImageViewer(): React.JSX.Element | null {
   const viewerIndex = useStore((state) => state.viewerIndex)
   const ensureImages = useStore((state) => state.ensureImages)
   const closeViewer = useStore((state) => state.closeViewer)
+  const openContextMenu = useStore((state) => state.openContextMenu)
   const step = useStore((state) => state.step)
   const toggleInclude = useStore((state) => state.toggleInclude)
   const includeTags = useStore((state) => state.includeTags)
@@ -240,7 +241,13 @@ export default function ImageViewer(): React.JSX.Element | null {
         ページ送りの領域はこの入れ物の中だけに収める。
         .viewer 直下に置くと、絶対配置なので下のバー (✕ など) まで覆ってしまう。
       */}
-      <div className="viewer__canvas">
+      <div
+        className="viewer__canvas"
+        onContextMenu={(event) => {
+          event.preventDefault()
+          openContextMenu({ x: event.clientX, y: event.clientY, id: currentId })
+        }}
+      >
         <div
           ref={stageRef}
           className="viewer__stage"

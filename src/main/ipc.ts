@@ -1,7 +1,7 @@
 import { statSync } from 'node:fs'
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { BrowserWindow, dialog, ipcMain, shell } from 'electron'
+import { BrowserWindow, clipboard, dialog, ipcMain, nativeImage, shell } from 'electron'
 import {
   IPC,
   type AppSettings,
@@ -15,9 +15,12 @@ import {
   type ScanCommand,
   type ScanProgress,
   type TagInfo,
-  type CloudDiagnostics
+  type CloudDiagnostics,
+  type CopyKind
 } from '@shared/types'
 import { closeRoot, cloudModeKey, openRoot, type AppContext } from './context'
+import { openImage } from './images'
+import { excludeTags } from '@shared/tag-filter'
 
 export interface ImageInfoResult {
   image: ImageRecord | null
@@ -140,6 +143,50 @@ export function registerIpcHandlers(ctx: AppContext): void {
   ipcMain.handle(IPC.revealImage, (_event, id: number): void => {
     const target = ctx.resolve(id)
     if (target) shell.showItemInFolder(target.fullPath)
+  })
+
+  ipcMain.handle(IPC.openImageExternal, async (_event, id: number): Promise<void> => {
+    const target = ctx.resolve(id)
+    if (target) await shell.openPath(target.fullPath)
+  })
+
+  // 右クリックメニューのコピー。renderer はフルパスを知らないので main 側で入れる
+  ipcMain.handle(IPC.copyImage, async (_event, id: number, kind: CopyKind): Promise<boolean> => {
+    const target = ctx.resolve(id)
+    if (!target) return false
+    switch (kind) {
+      case 'path':
+        clipboard.writeText(target.fullPath)
+        return true
+      case 'name':
+        clipboard.writeText(target.record.fileName)
+        return true
+      case 'tags':
+      case 'tagsExcluded': {
+        const all = ctx.db.getImageTags(id).map((tag) => tag.name)
+        const tags =
+          kind === 'tagsExcluded' ? excludeTags(all, ctx.settings.get().copyExcludeTags) : all
+        if (tags.length === 0) return false
+        clipboard.writeText(tags.join(', '))
+        return true
+      }
+      case 'image': {
+        // ユーザーが明示的に選んだ操作なので、未ダウンロードでもこの 1 枚は読む。
+        // HEIC や WebP など貼り付け先が扱えない形式もあるため、PNG に揃えて入れる
+        try {
+          const { image } = await openImage(target.fullPath)
+          const png = await image.png().toBuffer()
+          const native = nativeImage.createFromBuffer(png)
+          if (native.isEmpty()) return false
+          clipboard.writeImage(native)
+          return true
+        } catch {
+          return false
+        }
+      }
+      default:
+        return false
+    }
   })
 
   ipcMain.handle(IPC.listTags, (_event, request: TagListRequest): TagInfo[] => {

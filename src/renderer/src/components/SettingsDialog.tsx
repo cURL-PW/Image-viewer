@@ -1,6 +1,7 @@
 import { AVAILABLE_MODELS } from '@shared/types'
 import { useStore } from '../store'
 import CloudDiagnosticsPanel from './CloudDiagnostics'
+import ExcludeTagsField from './ExcludeTagsField'
 
 export default function SettingsDialog(): React.JSX.Element | null {
   const settings = useStore((state) => state.settings)
@@ -154,6 +155,8 @@ export default function SettingsDialog(): React.JSX.Element | null {
             />
             <p className="field__hint">画像の左右端をクリックしたときに前後へ移動する幅の割合です。</p>
           </section>
+
+          <ExcludeTagsField />
 
           <section className="field">
             <label>クラウド同期フォルダの診断</label>
