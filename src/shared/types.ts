@@ -294,6 +294,7 @@ export const IPC = {
   addTag: 'tags:add',
   removeTag: 'tags:remove',
   tagsForImages: 'tags:forImages',
+  findSimilar: 'library:findSimilar',
   suggestTags: 'tags:suggest',
   listSavedFilters: 'filters:list',
   saveFilter: 'filters:save',
@@ -324,7 +325,9 @@ export const IPC = {
   /** マウスの「戻る」ボタン (Windows の app-command 経由) */
   eventGoBack: 'event:goBack',
   /** ウィンドウの全画面状態が変わった (F11 以外、OS の操作で変わることもある) */
-  eventFullScreen: 'event:fullScreen'
+  eventFullScreen: 'event:fullScreen',
+  /** Ctrl + / Ctrl - / Ctrl 0 (Electron 標準の画面ズームの代わりにサムネイルの大きさを変える) */
+  eventThumbZoom: 'event:thumbZoom'
 } as const
 
 /**
@@ -359,13 +362,38 @@ export function imageUrl(image: Pick<ImageRecord, 'id' | 'mtime'>): string {
  * `epoch` は、未ダウンロードだったものが落ちてきたときに <img> を読み直させるための番号。
  * (雲タイルを表示済みの img は、URL が変わらない限り再要求しない)
  */
+/** サムネイルの表示サイズの範囲と、Ctrl + ホイール 1 ノッチあたりの変化量 (px) */
+export const THUMBNAIL_SIZE_MIN = 96
+export const THUMBNAIL_SIZE_MAX = 512
+export const THUMBNAIL_SIZE_STEP = 32
+export const THUMBNAIL_SIZE_DEFAULT = 256
+
+/**
+ * 表示サイズに対して生成するサムネイルの大きさ。
+ * 表示サイズをそのまま使うと、Ctrl + ホイールで 1 段変えるたびに全サムネイルを作り直すことになる。
+ * 2 段階に丸め、256px 以下は 256px、それより大きければ 512px で作って縮めて表示する
+ */
+export function thumbnailGenerationSize(displaySize: number): number {
+  return displaySize > THUMBNAIL_SIZE_DEFAULT ? THUMBNAIL_SIZE_MAX : THUMBNAIL_SIZE_DEFAULT
+}
+
+export function clampThumbnailSize(size: number): number {
+  if (!Number.isFinite(size)) return THUMBNAIL_SIZE_DEFAULT
+  return Math.min(THUMBNAIL_SIZE_MAX, Math.max(THUMBNAIL_SIZE_MIN, Math.round(size)))
+}
+
 /** 回転を 0 / 90 / 180 / 270 に揃える (負の値や 360 以上も受け付ける) */
 export function normalizeRotation(degrees: number): number {
   if (!Number.isFinite(degrees)) return 0
   return (((Math.round(degrees / 90) * 90) % 360) + 360) % 360
 }
 
-export function thumbUrl(image: Pick<ImageRecord, 'id' | 'mtime'>, epoch = 0): string {
+export function thumbUrl(
+  image: Pick<ImageRecord, 'id' | 'mtime'>,
+  epoch = 0,
+  generationSize = THUMBNAIL_SIZE_DEFAULT
+): string {
   const suffix = epoch > 0 ? `&e=${epoch}` : ''
-  return `${THUMB_PROTOCOL}://img/${image.id}?v=${image.mtime}${suffix}`
+  // 生成サイズが変われば中身も変わるので、URL も変えてブラウザのキャッシュを使い分ける
+  return `${THUMB_PROTOCOL}://img/${image.id}?v=${image.mtime}&s=${generationSize}${suffix}`
 }

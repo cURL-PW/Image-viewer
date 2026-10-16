@@ -531,6 +531,58 @@ export class LibraryDb {
     return [...counts.values()].sort((a, b) => b.count - a.count || a.name.localeCompare(b.name))
   }
 
+  /**
+   * タグの重なりで似た画像を探す。
+   *
+   * 各画像を「タグ → 確信度 × 重み」のベクトルとみなし、コサイン類似度の高い順に返す。
+   * general は重み 1、character は 2 (同じキャラクターが上に来やすくする)、rating は使わない。
+   * 対象はタグ付けが済んだ画像だけ。元の画像自身は含めない
+   */
+  findSimilar(rootId: number, imageId: number, limit: number): { id: number; score: number }[] {
+    const weight = `CASE t.category WHEN 4 THEN 2.0 ELSE 1.0 END`
+    const target = this.db
+      .prepare(
+        `SELECT it.tag_id AS tagId, it.confidence * ${weight} AS w
+           FROM image_tags it JOIN tags t ON t.id = it.tag_id
+          WHERE it.image_id = ? AND t.category != 9`
+      )
+      .all(imageId) as { tagId: number; w: number }[]
+    const targetNorm = Math.sqrt(target.reduce((sum, tag) => sum + tag.w * tag.w, 0))
+    if (target.length === 0 || targetNorm === 0) return []
+
+    // 元の画像とタグを 1 つも共有しない画像は類似度 0 なので、共有するものだけを候補にする。
+    // 候補ごとに内積と、自分のベクトルの長さ (の 2 乗) を 1 回の問い合わせで出す
+    const rows = this.db
+      .prepare(
+        `WITH target(tag_id, w) AS (SELECT value ->> 0, value ->> 1 FROM json_each(?)),
+              dots AS (
+                SELECT it.image_id AS id, SUM(target.w * it.confidence * ${weight}) AS dot
+                  FROM image_tags it
+                  JOIN target ON target.tag_id = it.tag_id
+                  JOIN tags t ON t.id = it.tag_id
+                 WHERE it.image_id != ?
+                 GROUP BY it.image_id
+              )
+         SELECT d.id AS id, d.dot AS dot,
+                (SELECT SUM((it.confidence * ${weight}) * (it.confidence * ${weight}))
+                   FROM image_tags it JOIN tags t ON t.id = it.tag_id
+                  WHERE it.image_id = d.id AND t.category != 9) AS norm2
+           FROM dots d JOIN images i ON i.id = d.id
+          WHERE i.root_id = ? AND i.scanned_model IS NOT NULL`
+      )
+      .all(
+        JSON.stringify(target.map((tag) => [tag.tagId, tag.w])),
+        imageId,
+        rootId
+      ) as { id: number; dot: number; norm2: number | null }[]
+
+    return rows
+      .filter((row) => row.norm2 !== null && row.norm2 > 0)
+      .map((row) => ({ id: row.id, score: row.dot / (targetNorm * Math.sqrt(row.norm2 as number)) }))
+      .sort((a, b) => b.score - a.score || a.id - b.id)
+      .slice(0, limit)
+  }
+
   /** タグ名の補完候補。前方一致を先に、続けて部分一致を出す */
   suggestTags(text: string, limit: number): string[] {
     const term = text.trim()

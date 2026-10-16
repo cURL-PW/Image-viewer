@@ -65,6 +65,7 @@ export default function ImageViewer(): React.JSX.Element | null {
   const addTag = useStore((state) => state.addTag)
   const removeTag = useStore((state) => state.removeTag)
   const tagsVersion = useStore((state) => state.tagsVersion)
+  const showSimilar = useStore((state) => state.showSimilar)
 
   const viewerRef = useRef<HTMLDivElement>(null)
   const stageRef = useRef<HTMLDivElement>(null)
@@ -484,6 +485,19 @@ export default function ImageViewer(): React.JSX.Element | null {
             aria-label="ごみ箱へ移動"
           >
             🗑
+          </button>
+          <button
+            type="button"
+            className="button button--subtle"
+            disabled={!info || info.tags.length === 0}
+            title={
+              info && info.tags.length === 0
+                ? 'タグが付いていない画像では探せません'
+                : 'ライブラリ全体からタグの似ている画像を探す'
+            }
+            onClick={() => showSimilar(currentId)}
+          >
+            似た画像
           </button>
           <button
             type="button"

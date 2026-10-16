@@ -67,6 +67,8 @@ export interface RendererApi {
   removeTag(ids: number[], tagId: number): Promise<void>
   /** 選択中の画像に付いているタグ (付いている枚数付き) */
   tagsForImages(ids: number[]): Promise<TagInfo[]>
+  /** 元の画像と、タグの似ている順に並べた画像の ID (先頭が元の画像) */
+  findSimilar(id: number): Promise<number[]>
   /** タグ名の補完候補 */
   suggestTags(text: string): Promise<string[]>
   /** OS の既定のアプリで開く */
@@ -102,4 +104,6 @@ export interface RendererApi {
   onGoBack(listener: () => void): () => void
   /** 全画面の出入り (Esc や OS の操作で抜けた場合も来る) */
   onFullScreen(listener: (fullScreen: boolean) => void): () => void
+  /** Ctrl + (1) / Ctrl - (-1) / Ctrl 0 (0 = 既定に戻す) */
+  onThumbZoom(listener: (delta: number) => void): () => void
 }

@@ -1,7 +1,7 @@
 import path from 'node:path'
 import fs from 'node:fs'
 import { BrowserWindow, app, session, shell } from 'electron'
-import { IMAGE_PROTOCOL, IPC, THUMB_PROTOCOL } from '@shared/types'
+import { IMAGE_PROTOCOL, IPC, THUMB_PROTOCOL, thumbnailGenerationSize } from '@shared/types'
 import { broadcast, cloudModeKey, openRoot, type AppContext } from './context'
 import { LibraryDb } from './db'
 import { registerIpcHandlers } from './ipc'
@@ -94,7 +94,7 @@ function createContext(): AppContext {
   const thumbs = new DerivedImageCache({
     label: 'thumb',
     cacheDir: path.join(userData, 'thumbnails'),
-    size: settings.get().thumbnailSize,
+    size: thumbnailGenerationSize(settings.get().thumbnailSize),
     quality: 80,
     guard
   })
@@ -167,6 +167,25 @@ function createWindow(): BrowserWindow {
     if (command !== 'browser-backward') return
     event.preventDefault()
     window.webContents.send(IPC.eventGoBack)
+  })
+
+  // Ctrl + / Ctrl - / Ctrl 0 は Electron 標準では画面全体の拡大縮小になる。
+  // 画面ではなくサムネイルの大きさを変えたいので、ここで止めて renderer に伝える。
+  // (Ctrl + ホイールは renderer 側で止める)
+  window.webContents.setVisualZoomLevelLimits(1, 1).catch(() => undefined)
+  window.webContents.on('before-input-event', (event, input) => {
+    if (input.type !== 'keyDown' || !(input.control || input.meta) || input.alt) return
+    const delta =
+      input.key === '+' || input.key === '=' || input.key === ';'
+        ? 1
+        : input.key === '-' || input.key === '_'
+          ? -1
+          : input.key === '0'
+            ? 0
+            : null
+    if (delta === null) return
+    event.preventDefault()
+    window.webContents.send(IPC.eventThumbZoom, delta)
   })
 
   // 全画面の出入りを renderer に伝える。F11 以外 (OS の操作や Esc) で変わることもあるため
