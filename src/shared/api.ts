@@ -11,7 +11,10 @@ import type {
   IndexProgress,
   LibraryChange,
   RootInfo,
+  SavedFilter,
+  SavedFilterData,
   ScanCommand,
+  TrashResult,
   ScanProgress,
   TagInfo
 } from './types'
@@ -43,6 +46,29 @@ export interface RendererApi {
   getImages(ids: number[]): Promise<ImageRecord[]>
   getImageInfo(id: number): Promise<ImageInfo>
   revealImage(id: number): Promise<void>
+  /** 表示上の回転を記憶する (元ファイルは変えない)。保存した値を返す */
+  setRotation(id: number, rotation: number): Promise<number>
+  /** ウィンドウの全画面を切り替える。切り替え後の状態を返す */
+  setFullScreen(fullScreen: boolean): Promise<boolean>
+  /** お気に入りを付け外しする。今のライブラリの画像だけが対象 */
+  setFavorite(ids: number[], favorite: boolean): Promise<void>
+  /** 今のライブラリに保存した絞り込み条件 (保存順) */
+  listSavedFilters(): Promise<SavedFilter[]>
+  saveFilter(name: string, data: SavedFilterData): Promise<SavedFilter[]>
+  renameSavedFilter(id: number, name: string): Promise<SavedFilter[]>
+  deleteSavedFilter(id: number): Promise<SavedFilter[]>
+  /** OS のごみ箱へ移す (完全削除はしない) */
+  trashImages(ids: number[]): Promise<TrashResult>
+  /** 複数画像のパスやファイル名を改行区切りでコピーする */
+  copyText(ids: number[], kind: 'path' | 'name'): Promise<boolean>
+  /** タグを手で足す。無いタグ名なら general として作る */
+  addTag(ids: number[], name: string): Promise<void>
+  /** タグを手で外す。付け直しでも戻らない */
+  removeTag(ids: number[], tagId: number): Promise<void>
+  /** 選択中の画像に付いているタグ (付いている枚数付き) */
+  tagsForImages(ids: number[]): Promise<TagInfo[]>
+  /** タグ名の補完候補 */
+  suggestTags(text: string): Promise<string[]>
   /** OS の既定のアプリで開く */
   openImageExternal(id: number): Promise<void>
   /** 画像やパスをクリップボードへ入れる。入れるものが無ければ false */
@@ -74,4 +100,6 @@ export interface RendererApi {
   onRootChanged(listener: (root: RootInfo | null) => void): () => void
   /** マウスの「戻る」ボタン。DOM のイベントが来ない構成のための保険 */
   onGoBack(listener: () => void): () => void
+  /** 全画面の出入り (Esc や OS の操作で抜けた場合も来る) */
+  onFullScreen(listener: (fullScreen: boolean) => void): () => void
 }

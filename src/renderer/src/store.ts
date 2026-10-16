@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { normalizeRotation } from '@shared/types'
 import type {
   AppSettings,
   FolderNode,
@@ -7,6 +8,8 @@ import type {
   IndexProgress,
   LibraryInfo,
   RootInfo,
+  SavedFilter,
+  SavedFilterData,
   ScanProgress,
   SortKey,
   SortOrder,
@@ -14,6 +17,11 @@ import type {
   TagMode
 } from '@shared/types'
 
+/** 選択を解除した状態。フォルダや絞り込みを切り替えたときに使う */
+const NO_SELECTION = { selection: [] as number[], selectionAnchor: null as number | null }
+
+/** ファイル名検索の入力が止まってから絞り込むまでの待ち時間 (ms) */
+const SEARCH_DEBOUNCE = 300
 /** ライブラリ変更後の再クエリをまとめるための待ち時間 (ms) */
 const REQUERY_DEBOUNCE = 250
 /**
@@ -36,6 +44,11 @@ interface State {
   tagMode: TagMode
   sortKey: SortKey
   sortOrder: SortOrder
+  /** ファイル名・パスの検索語 (入力欄の値) */
+  search: string
+  favoritesOnly: boolean
+  /** 今のライブラリに保存した絞り込み条件 */
+  savedFilters: SavedFilter[]
 
   /** 絞り込み結果の画像 ID を表示順に並べたもの */
   ids: number[]
@@ -60,7 +73,18 @@ interface State {
   contextMenu: ContextMenuState | null
   /** 画面下に一瞬だけ出す通知 (「コピーしました」など) */
   notice: { text: string; key: number } | null
+  /** ウィンドウが全画面か。main からの通知で合わせる */
+  fullScreen: boolean
+  /** グリッドで選択中の画像 ID (選んだ順) */
+  selection: number[]
+  /** Shift クリックの範囲選択の起点 (画像 ID) */
+  selectionAnchor: number | null
+  /** 手動タグを変えるたびに増やす。単画像ビューのタグ欄を読み直させるため */
+  tagsVersion: number
 }
+
+/** グリッドのクリックでの選択のしかた */
+export type SelectMode = 'replace' | 'toggle' | 'range' | 'rangeAdd' | 'anchor'
 
 export interface ContextMenuState {
   /** 表示位置 (クライアント座標) */
@@ -84,6 +108,18 @@ interface Actions {
   clearTags(): void
   setTagMode(mode: TagMode): void
   setTagSearch(search: string): void
+  /** ファイル名・パス検索。入力が止まってから絞り込む */
+  setSearch(search: string): void
+  setFavoritesOnly(favoritesOnly: boolean): void
+  /** お気に入りを付け外しする (複数可) */
+  setFavorite(ids: number[], favorite: boolean): Promise<void>
+  refreshSavedFilters(): Promise<void>
+  /** 今の条件を名前を付けて保存する */
+  saveFilter(name: string): Promise<void>
+  /** 保存した条件を当てる。フォルダは今のまま */
+  applySavedFilter(filter: SavedFilter): void
+  renameSavedFilter(id: number, name: string): Promise<void>
+  deleteSavedFilter(id: number): Promise<void>
   refresh(): Promise<void>
   refreshTree(): Promise<void>
   refreshTags(): Promise<void>
@@ -97,6 +133,16 @@ interface Actions {
   openContextMenu(menu: ContextMenuState): void
   closeContextMenu(): void
   showNotice(text: string): void
+  setFullScreen(fullScreen: boolean): Promise<void>
+  /** 表示上の回転を 90° 単位で変える (正で時計回り)。DB に記憶し、サムネイルにも反映する */
+  rotate(id: number, delta: number): Promise<void>
+  select(id: number, mode: SelectMode): void
+  selectAll(): void
+  clearSelection(): void
+  /** ごみ箱へ移す (確認は呼び出し側で行う) */
+  trashImages(ids: number[]): Promise<void>
+  addTag(ids: number[], name: string): Promise<void>
+  removeTag(ids: number[], tagId: number): Promise<void>
 }
 
 const initialScan: ScanProgress = {
@@ -116,6 +162,9 @@ const initialScan: ScanProgress = {
 
 export const useStore = create<State & Actions>((set, get) => {
   let requeryTimer: ReturnType<typeof setTimeout> | null = null
+  let searchTimer: ReturnType<typeof setTimeout> | null = null
+  /** クエリに使う検索語。入力欄の値 (state.search) から遅れて追いつく */
+  let appliedSearch = ''
   // 非同期の応答が追い越されたときに、古い結果で上書きしないための世代番号
   let queryToken = 0
   let tagToken = 0
@@ -143,8 +192,15 @@ export const useStore = create<State & Actions>((set, get) => {
       excludeTags: state.excludeTags,
       tagMode: state.tagMode,
       sortKey: state.sortKey,
-      sortOrder: state.sortOrder
+      sortOrder: state.sortOrder,
+      search: appliedSearch,
+      favoritesOnly: state.favoritesOnly
     }
+  }
+
+  const cancelSearchTimer = (): void => {
+    if (searchTimer) clearTimeout(searchTimer)
+    searchTimer = null
   }
 
   let libraryToken = 0
@@ -157,20 +213,27 @@ export const useStore = create<State & Actions>((set, get) => {
       void get().refreshLibraries()
       return
     }
+    cancelSearchTimer()
+    appliedSearch = ''
     set({
       root,
       dir: '',
       includeTags: [],
       excludeTags: [],
+      search: '',
+      favoritesOnly: false,
+      savedFilters: [],
       images: {},
       ids: [],
       tags: [],
       viewerIndex: null,
+      ...NO_SELECTION,
       lastViewedIndex: null,
       ...(root ? {} : { tree: null })
     })
     void get().refreshLibraries()
     if (!root) return
+    void get().refreshSavedFilters()
     await Promise.all([get().refreshTree(), get().refresh()])
     void get().refreshTags()
   }
@@ -187,6 +250,9 @@ export const useStore = create<State & Actions>((set, get) => {
     tagMode: 'and',
     sortKey: 'path',
     sortOrder: 'asc',
+    search: '',
+    favoritesOnly: false,
+    savedFilters: [],
     ids: [],
     images: {},
     loading: false,
@@ -200,6 +266,10 @@ export const useStore = create<State & Actions>((set, get) => {
     thumbEpoch: 0,
     contextMenu: null,
     notice: null,
+    fullScreen: false,
+    selection: [],
+    selectionAnchor: null,
+    tagsVersion: 0,
 
     async init() {
       if (initStarted) return
@@ -255,9 +325,11 @@ export const useStore = create<State & Actions>((set, get) => {
         if (get().viewerIndex !== null) get().closeViewer()
       })
       window.api.onImageTagged(() => scheduleRefresh(TAGGED_DEBOUNCE))
+      window.api.onFullScreen((fullScreen) => set({ fullScreen }))
 
       void get().refreshLibraries()
       if (root) {
+        void get().refreshSavedFilters()
         await Promise.all([get().refreshTree(), get().refresh()])
         void get().refreshTags()
       }
@@ -292,13 +364,13 @@ export const useStore = create<State & Actions>((set, get) => {
     },
 
     setDir(dir) {
-      set({ dir, viewerIndex: null })
+      set({ dir, viewerIndex: null, ...NO_SELECTION })
       void get().refresh()
       void get().refreshTags()
     },
 
     setRecursive(recursive) {
-      set({ recursive, viewerIndex: null })
+      set({ recursive, viewerIndex: null, ...NO_SELECTION })
       void get().refresh()
       void get().refreshTags()
     },
@@ -316,7 +388,8 @@ export const useStore = create<State & Actions>((set, get) => {
           ? includeTags.filter((id) => id !== tagId)
           : [...includeTags, tagId],
         excludeTags: excludeTags.filter((id) => id !== tagId),
-        viewerIndex: null
+        viewerIndex: null,
+        ...NO_SELECTION
       })
       void get().refresh()
       void get().refreshTags()
@@ -329,20 +402,21 @@ export const useStore = create<State & Actions>((set, get) => {
           ? excludeTags.filter((id) => id !== tagId)
           : [...excludeTags, tagId],
         includeTags: includeTags.filter((id) => id !== tagId),
-        viewerIndex: null
+        viewerIndex: null,
+        ...NO_SELECTION
       })
       void get().refresh()
       void get().refreshTags()
     },
 
     clearTags() {
-      set({ includeTags: [], excludeTags: [], viewerIndex: null })
+      set({ includeTags: [], excludeTags: [], viewerIndex: null, ...NO_SELECTION })
       void get().refresh()
       void get().refreshTags()
     },
 
     setTagMode(tagMode) {
-      set({ tagMode, viewerIndex: null })
+      set({ tagMode, viewerIndex: null, ...NO_SELECTION })
       void get().refresh()
       void get().refreshTags()
     },
@@ -350,6 +424,86 @@ export const useStore = create<State & Actions>((set, get) => {
     setTagSearch(tagSearch) {
       set({ tagSearch })
       void get().refreshTags()
+    },
+
+    setSearch(search) {
+      set({ search })
+      cancelSearchTimer()
+      searchTimer = setTimeout(() => {
+        searchTimer = null
+        if (appliedSearch === search) return
+        appliedSearch = search
+        set({ viewerIndex: null, ...NO_SELECTION })
+        void get().refresh()
+      }, SEARCH_DEBOUNCE)
+    },
+
+    setFavoritesOnly(favoritesOnly) {
+      set({ favoritesOnly, viewerIndex: null, ...NO_SELECTION })
+      void get().refresh()
+    },
+
+    async setFavorite(ids, favorite) {
+      if (ids.length === 0) return
+      // 先に表示へ反映する
+      set((state) => {
+        const images = { ...state.images }
+        for (const id of ids) {
+          const image = images[id]
+          if (image) images[id] = { ...image, favorite }
+        }
+        return { images }
+      })
+      await window.api.setFavorite(ids, favorite)
+      // お気に入りだけを表示中なら、外したものが一覧から消える。
+      // 単画像ビューで見ている 1 枚は refresh が近くの画像へ寄せる
+      if (get().favoritesOnly) void get().refresh()
+    },
+
+    async refreshSavedFilters() {
+      set({ savedFilters: await window.api.listSavedFilters() })
+    },
+
+    async saveFilter(name) {
+      const state = get()
+      const data: SavedFilterData = {
+        includeTags: state.includeTags,
+        excludeTags: state.excludeTags,
+        tagMode: state.tagMode,
+        search: state.search,
+        favoritesOnly: state.favoritesOnly,
+        sortKey: state.sortKey,
+        sortOrder: state.sortOrder
+      }
+      set({ savedFilters: await window.api.saveFilter(name, data) })
+    },
+
+    applySavedFilter(filter) {
+      const { data } = filter
+      cancelSearchTimer()
+      appliedSearch = data.search
+      set({
+        includeTags: data.includeTags,
+        excludeTags: data.excludeTags,
+        tagMode: data.tagMode,
+        search: data.search,
+        favoritesOnly: data.favoritesOnly,
+        sortKey: data.sortKey,
+        sortOrder: data.sortOrder,
+        viewerIndex: null,
+        ...NO_SELECTION
+      })
+      void window.api.setSettings({ sortKey: data.sortKey, sortOrder: data.sortOrder })
+      void get().refresh()
+      void get().refreshTags()
+    },
+
+    async renameSavedFilter(id, name) {
+      set({ savedFilters: await window.api.renameSavedFilter(id, name) })
+    },
+
+    async deleteSavedFilter(id) {
+      set({ savedFilters: await window.api.deleteSavedFilter(id) })
     },
 
     async refresh() {
@@ -453,6 +607,116 @@ export const useStore = create<State & Actions>((set, get) => {
 
     showNotice(text) {
       set({ notice: { text, key: Date.now() } })
+    },
+
+    select(id, mode) {
+      const { ids, selection, selectionAnchor } = get()
+      if (mode === 'replace') {
+        set({ selection: [id], selectionAnchor: id })
+        return
+      }
+      // 選択は解除し、次の Shift クリックの起点だけ覚える (修飾キー無しのクリック)
+      if (mode === 'anchor') {
+        set({ selection: [], selectionAnchor: id })
+        return
+      }
+      if (mode === 'toggle') {
+        set({
+          selection: selection.includes(id)
+            ? selection.filter((selected) => selected !== id)
+            : [...selection, id],
+          selectionAnchor: id
+        })
+        return
+      }
+      // 範囲選択。起点が無い (または一覧から消えた) ときはその 1 枚から
+      const to = ids.indexOf(id)
+      const from = selectionAnchor !== null ? ids.indexOf(selectionAnchor) : -1
+      if (to === -1) return
+      const start = from === -1 ? to : Math.min(from, to)
+      const end = from === -1 ? to : Math.max(from, to)
+      const range = ids.slice(start, end + 1)
+      const merged =
+        mode === 'rangeAdd' ? [...selection, ...range.filter((r) => !selection.includes(r))] : range
+      // 起点は動かさない (続けて Shift クリックすると同じ起点から選び直す)
+      set({ selection: merged, selectionAnchor: from === -1 ? id : selectionAnchor })
+    },
+
+    selectAll() {
+      set({ selection: [...get().ids], selectionAnchor: get().ids[0] ?? null })
+    },
+
+    clearSelection() {
+      if (get().selection.length > 0) set(NO_SELECTION)
+    },
+
+    async trashImages(ids) {
+      if (ids.length === 0) return
+      const result = await window.api.trashImages(ids)
+      const removed = new Set(result.trashed)
+      if (removed.size > 0) {
+        // 監視の通知を待たずに一覧から外す。単画像ビューで見ていた 1 枚が消えたら、
+        // 同じ位置 (= 次の画像)、末尾だったら前の画像、無くなればグリッドへ
+        set((state) => {
+          const nextIds = state.ids.filter((id) => !removed.has(id))
+          let viewerIndex = state.viewerIndex
+          if (viewerIndex !== null) {
+            const currentId = state.ids[viewerIndex]
+            const kept = nextIds.indexOf(currentId)
+            if (nextIds.length === 0) viewerIndex = null
+            else viewerIndex = kept !== -1 ? kept : Math.min(viewerIndex, nextIds.length - 1)
+          }
+          return {
+            ids: nextIds,
+            viewerIndex,
+            selection: state.selection.filter((id) => !removed.has(id))
+          }
+        })
+        void get().refresh()
+        void get().refreshTree()
+        void get().refreshTags()
+        void get().refreshLibraries()
+      }
+      if (result.failed > 0) {
+        get().showNotice(`${result.failed} 枚をごみ箱へ移動できませんでした`)
+      } else if (removed.size > 1) {
+        get().showNotice(`${removed.size} 枚をごみ箱へ移動しました`)
+      }
+    },
+
+    async addTag(ids, name) {
+      if (ids.length === 0 || name.trim() === '') return
+      await window.api.addTag(ids, name)
+      set((state) => ({ tagsVersion: state.tagsVersion + 1 }))
+      void get().refreshTags()
+      if (get().includeTags.length > 0 || get().excludeTags.length > 0) void get().refresh()
+    },
+
+    async removeTag(ids, tagId) {
+      if (ids.length === 0) return
+      await window.api.removeTag(ids, tagId)
+      set((state) => ({ tagsVersion: state.tagsVersion + 1 }))
+      void get().refreshTags()
+      if (get().includeTags.length > 0 || get().excludeTags.length > 0) void get().refresh()
+    },
+
+    async setFullScreen(fullScreen) {
+      set({ fullScreen: await window.api.setFullScreen(fullScreen) })
+    },
+
+    async rotate(id, delta) {
+      const current = get().images[id]
+      if (!current) return
+      const target = normalizeRotation(current.rotation + delta * 90)
+      // 先に表示へ反映し、保存は後から追いかける (ボタンの反応を待たせない)
+      set((state) => ({ images: { ...state.images, [id]: { ...current, rotation: target } } }))
+      const saved = await window.api.setRotation(id, target)
+      if (saved !== target) {
+        set((state) => {
+          const image = state.images[id]
+          return image ? { images: { ...state.images, [id]: { ...image, rotation: saved } } } : {}
+        })
+      }
     }
   }
 })

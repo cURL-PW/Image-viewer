@@ -510,6 +510,16 @@ export class Library extends EventEmitter<LibraryEvents> {
     }
   }
 
+  /**
+   * アプリ自身が消したファイル (ごみ箱へ移動) を、監視の通知を待たずに DB から外す。
+   * 監視は後から同じパスの削除を伝えてくるが、その時点では DB に無いので何もしない
+   */
+  forget(ids: number[]): void {
+    if (ids.length === 0) return
+    this.db.removeIds(ids)
+    this.emit('change', { added: [], updated: [], removed: ids, treeDirty: true })
+  }
+
   /** 消えたパスを DB から外す。フォルダごと消えた場合は配下もまとめて外す。 */
   private removePath(rootId: number, relPath: string): number[] {
     const id = this.db.removeByRelPath(rootId, relPath)

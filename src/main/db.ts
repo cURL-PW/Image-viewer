@@ -34,7 +34,7 @@ export interface TagResult {
   confidence: number
 }
 
-const SCHEMA_VERSION = 1
+const SCHEMA_VERSION = 4
 
 /**
  * ファイル名中の数字列をゼロ埋めして自然順ソート用のキーを作る。
@@ -87,8 +87,48 @@ export class LibraryDb {
 
   private migrate(): void {
     const row = this.db.prepare('PRAGMA user_version').get() as { user_version: number } | undefined
-    if ((row?.user_version ?? 0) >= SCHEMA_VERSION) return
+    const version = row?.user_version ?? 0
+    if (version >= SCHEMA_VERSION) return
 
+    if (version < 1) this.createBaseTables()
+    // v2: 画像ごとの表示上の回転
+    if (version < 2) this.addColumn('images', 'rotation', 'INTEGER NOT NULL DEFAULT 0')
+    // v3: お気に入りと、保存した絞り込み条件
+    if (version < 3) {
+      this.addColumn('images', 'favorite', 'INTEGER NOT NULL DEFAULT 0')
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS saved_filters (
+          id      INTEGER PRIMARY KEY,
+          root_id INTEGER NOT NULL REFERENCES roots(id) ON DELETE CASCADE,
+          name    TEXT NOT NULL,
+          data    TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_saved_filters_root ON saved_filters(root_id);
+        CREATE INDEX IF NOT EXISTS idx_images_favorite    ON images(root_id, favorite);
+      `)
+    }
+    // v4: 手動で足した / 外したタグ。自動タグ (image_tags) を書き直すたびに当て直す
+    if (version < 4) {
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS image_tag_overrides (
+          image_id INTEGER NOT NULL REFERENCES images(id) ON DELETE CASCADE,
+          tag_id   INTEGER NOT NULL REFERENCES tags(id),
+          mode     INTEGER NOT NULL,  -- 1 = 足した, -1 = 外した
+          PRIMARY KEY (image_id, tag_id)
+        );
+      `)
+    }
+    this.db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`)
+  }
+
+  /** 既に列があれば何もしない (途中で失敗した移行をやり直せるように) */
+  private addColumn(table: string, column: string, definition: string): void {
+    const columns = this.db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]
+    if (columns.some((entry) => entry.name === column)) return
+    this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`)
+  }
+
+  private createBaseTables(): void {
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS roots (
         id   INTEGER PRIMARY KEY,
@@ -133,7 +173,6 @@ export class LibraryDb {
       CREATE INDEX IF NOT EXISTS idx_images_unscanned ON images(root_id, scanned_model);
       CREATE INDEX IF NOT EXISTS idx_image_tags_tag   ON image_tags(tag_id);
     `)
-    this.db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`)
   }
 
   close(): void {
@@ -233,6 +272,8 @@ export class LibraryDb {
         WHERE id = ?`
     ).run(file.mtime, file.size, existing.id)
     this.stmt('DELETE FROM image_tags WHERE image_id = ?').run(existing.id)
+    // 手動で足したタグは付け直しを待たずに残す
+    this.applyTagOverrides(existing.id)
     return { id: existing.id, added: false, changed: true }
   }
 
@@ -321,6 +362,47 @@ export class LibraryDb {
     this.db.prepare('UPDATE images SET width = ?, height = ? WHERE id = ?').run(width, height, id)
   }
 
+  /** 表示上の回転を記憶する。ファイルの内容が変わっても残す (タグとは違い画像の見え方の好みなので) */
+  setRotation(id: number, rotation: number): void {
+    this.db.prepare('UPDATE images SET rotation = ? WHERE id = ?').run(rotation, id)
+  }
+
+  /** お気に入りを付け外しする。別ライブラリの画像は触らない。ファイルの内容が変わっても残す */
+  setFavorite(rootId: number, ids: number[], favorite: boolean): void {
+    const targets = intList(ids)
+    if (targets.length === 0) return
+    this.transaction(() => {
+      const statement = this.stmt('UPDATE images SET favorite = ? WHERE id = ? AND root_id = ?')
+      for (const id of targets) statement.run(favorite ? 1 : 0, id, rootId)
+    })
+  }
+
+  // -------------------------------------------------------- saved filters
+
+  listSavedFilters(rootId: number): { id: number; name: string; data: string }[] {
+    return this.db
+      .prepare('SELECT id, name, data FROM saved_filters WHERE root_id = ? ORDER BY id')
+      .all(rootId) as { id: number; name: string; data: string }[]
+  }
+
+  addSavedFilter(rootId: number, name: string, data: string): number {
+    return Number(
+      this.db
+        .prepare('INSERT INTO saved_filters (root_id, name, data) VALUES (?, ?, ?)')
+        .run(rootId, name, data).lastInsertRowid
+    )
+  }
+
+  renameSavedFilter(rootId: number, id: number, name: string): void {
+    this.db
+      .prepare('UPDATE saved_filters SET name = ? WHERE id = ? AND root_id = ?')
+      .run(name, id, rootId)
+  }
+
+  deleteSavedFilter(rootId: number, id: number): void {
+    this.db.prepare('DELETE FROM saved_filters WHERE id = ? AND root_id = ?').run(id, rootId)
+  }
+
   // ---------------------------------------------------------------- query
 
   queryImageIds(rootId: number, query: ImageQuery): number[] {
@@ -363,14 +445,119 @@ export class LibraryDb {
   }
 
   getImageTags(imageId: number): ImageTag[] {
-    return this.db
+    const rows = this.db
       .prepare(
-        `SELECT t.id AS id, t.name AS name, t.category AS category, it.confidence AS confidence
-           FROM image_tags it JOIN tags t ON t.id = it.tag_id
+        `SELECT t.id AS id, t.name AS name, t.category AS category, it.confidence AS confidence,
+                COALESCE(o.mode, 0) = 1 AS manual
+           FROM image_tags it
+           JOIN tags t ON t.id = it.tag_id
+           LEFT JOIN image_tag_overrides o ON o.image_id = it.image_id AND o.tag_id = it.tag_id
           WHERE it.image_id = ?
-          ORDER BY it.confidence DESC`
+          ORDER BY manual DESC, it.confidence DESC`
       )
-      .all(imageId) as unknown as ImageTag[]
+      .all(imageId) as unknown as (Omit<ImageTag, 'manual'> & { manual: number })[]
+    return rows.map((row) => ({ ...row, manual: row.manual === 1 }))
+  }
+
+  // ---------------------------------------------------------- manual tags
+
+  /** 手動の追加・削除を image_tags に反映する */
+  private applyTagOverrides(imageId: number): void {
+    this.stmt(
+      `DELETE FROM image_tags WHERE image_id = ? AND tag_id IN
+         (SELECT tag_id FROM image_tag_overrides WHERE image_id = ? AND mode = -1)`
+    ).run(imageId, imageId)
+    this.stmt(
+      `INSERT OR REPLACE INTO image_tags (image_id, tag_id, confidence)
+         SELECT image_id, tag_id, 1.0 FROM image_tag_overrides WHERE image_id = ? AND mode = 1`
+    ).run(imageId)
+  }
+
+  /**
+   * 画像にタグを手で足す。無いタグ名なら general として作る。
+   * 確信度は 1 (100%) として扱う。足したタグの ID を返す
+   */
+  addManualTag(rootId: number, ids: number[], name: string): number | null {
+    const tagName = name.trim()
+    const targets = this.idsInRoot(rootId, ids)
+    if (tagName === '' || targets.length === 0) return null
+    return this.transaction(() => {
+      const tagId = this.getOrCreateTagId(tagName, 0)
+      for (const id of targets) {
+        this.stmt(
+          'INSERT OR REPLACE INTO image_tag_overrides (image_id, tag_id, mode) VALUES (?, ?, 1)'
+        ).run(id, tagId)
+        this.stmt(
+          'INSERT OR REPLACE INTO image_tags (image_id, tag_id, confidence) VALUES (?, ?, 1.0)'
+        ).run(id, tagId)
+      }
+      return tagId
+    })
+  }
+
+  /** 画像からタグを手で外す。自動で付いたタグでも、付け直しで戻らないよう記録する */
+  removeManualTag(rootId: number, ids: number[], tagId: number): void {
+    const targets = this.idsInRoot(rootId, ids)
+    if (!Number.isInteger(tagId) || targets.length === 0) return
+    this.transaction(() => {
+      for (const id of targets) {
+        this.stmt(
+          'INSERT OR REPLACE INTO image_tag_overrides (image_id, tag_id, mode) VALUES (?, ?, -1)'
+        ).run(id, tagId)
+        this.stmt('DELETE FROM image_tags WHERE image_id = ? AND tag_id = ?').run(id, tagId)
+      }
+    })
+  }
+
+  /** 複数画像に付いているタグを、付いている枚数付きで返す (多い順) */
+  tagsForImages(rootId: number, ids: number[]): TagInfo[] {
+    const counts = new Map<number, TagInfo>()
+    for (const chunk of chunks(this.idsInRoot(rootId, ids))) {
+      const placeholders = chunk.map(() => '?').join(',')
+      const rows = this.db
+        .prepare(
+          `SELECT t.id AS id, t.name AS name, t.category AS category, COUNT(*) AS count
+             FROM image_tags it JOIN tags t ON t.id = it.tag_id
+            WHERE it.image_id IN (${placeholders})
+            GROUP BY t.id`
+        )
+        .all(...chunk) as unknown as TagInfo[]
+      for (const row of rows) {
+        const existing = counts.get(row.id)
+        if (existing) existing.count += row.count
+        else counts.set(row.id, { ...row })
+      }
+    }
+    return [...counts.values()].sort((a, b) => b.count - a.count || a.name.localeCompare(b.name))
+  }
+
+  /** タグ名の補完候補。前方一致を先に、続けて部分一致を出す */
+  suggestTags(text: string, limit: number): string[] {
+    const term = text.trim()
+    if (term === '') return []
+    const rows = this.db
+      .prepare(
+        `SELECT name FROM tags
+          WHERE name LIKE ? ESCAPE '\\'
+          ORDER BY CASE WHEN name LIKE ? ESCAPE '\\' THEN 0 ELSE 1 END, length(name), name
+          LIMIT ?`
+      )
+      .all(`%${escapeLike(term)}%`, `${escapeLike(term)}%`, limit) as { name: string }[]
+    return rows.map((row) => row.name)
+  }
+
+  /** 指定ライブラリに属する ID だけに絞る (別ライブラリの画像を書き換えないため) */
+  private idsInRoot(rootId: number, ids: number[]): number[] {
+    const found: number[] = []
+    // 全選択だと数万件になるので、SQL の変数の上限に掛からないよう分けて問い合わせる
+    for (const chunk of chunks(intList(ids))) {
+      const placeholders = chunk.map(() => '?').join(',')
+      const rows = this.db
+        .prepare(`SELECT id FROM images WHERE root_id = ? AND id IN (${placeholders})`)
+        .all(rootId, ...chunk) as { id: number }[]
+      for (const row of rows) found.push(row.id)
+    }
+    return found
   }
 
   // ----------------------------------------------------------------- tree
@@ -451,6 +638,8 @@ export class LibraryDb {
       for (const tag of tags) {
         insert.run(imageId, this.getOrCreateTagId(tag.name, tag.category), tag.confidence)
       }
+      // 手動の追加・削除は自動タグより優先する (再スキャンやモデル変更でも戻らない)
+      this.applyTagOverrides(imageId)
       this.db
         .prepare('UPDATE images SET scanned_model = ?, scan_error = NULL WHERE id = ?')
         .run(modelId, imageId)
@@ -541,7 +730,7 @@ export class LibraryDb {
 
 // ------------------------------------------------------------------ utils
 
-const IMAGE_COLUMNS = `id, rel_path, dir_path, file_name, mtime, size, width, height, scanned_model, scan_error`
+const IMAGE_COLUMNS = `id, rel_path, dir_path, file_name, mtime, size, width, height, scanned_model, scan_error, rotation, favorite`
 
 interface RawImage {
   id: number
@@ -554,6 +743,8 @@ interface RawImage {
   height: number | null
   scanned_model: string | null
   scan_error: string | null
+  rotation: number
+  favorite: number
 }
 
 function toImageRecord(row: RawImage): ImageRecord {
@@ -567,13 +758,28 @@ function toImageRecord(row: RawImage): ImageRecord {
     width: row.width,
     height: row.height,
     scannedModel: row.scanned_model,
-    scanError: row.scan_error
+    scanError: row.scan_error,
+    rotation: row.rotation,
+    favorite: row.favorite === 1
   }
 }
 
 /** LIKE のワイルドカードを無効化する (フォルダ名に % や _ が含まれる場合の対策)。 */
 function escapeLike(value: string): string {
   return value.replace(/[\\%_]/g, (char) => `\\${char}`)
+}
+
+/** 検索語を空白 (全角を含む) で区切る */
+export function searchTerms(search: string | undefined): string[] {
+  return (search ?? '').split(/[\s\u3000]+/).filter((term) => term !== '')
+}
+
+const CHUNK_SIZE = 500
+
+function chunks<T>(items: T[]): T[][] {
+  const result: T[][] = []
+  for (let i = 0; i < items.length; i += CHUNK_SIZE) result.push(items.slice(i, i + CHUNK_SIZE))
+  return result
 }
 
 function intList(ids: number[]): number[] {
@@ -618,6 +824,14 @@ export function buildWhere(rootId: number, query: ImageQuery): { where: string; 
     clauses.push(`id NOT IN (SELECT image_id FROM image_tags WHERE tag_id IN (${placeholders}))`)
     params.push(...exclude)
   }
+
+  // ファイル名・パス検索。語ごとに AND。LIKE は ASCII の大文字小文字を区別しない
+  for (const term of searchTerms(query.search)) {
+    clauses.push(`rel_path LIKE ? ESCAPE '\\'`)
+    params.push(`%${escapeLike(term)}%`)
+  }
+
+  if (query.favoritesOnly) clauses.push('favorite = 1')
 
   // タグ条件がある間は、まだスキャンされていない画像は結果に含めない
   if (include.length > 0 || exclude.length > 0) {

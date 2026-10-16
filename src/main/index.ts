@@ -169,6 +169,11 @@ function createWindow(): BrowserWindow {
     window.webContents.send(IPC.eventGoBack)
   })
 
+  // 全画面の出入りを renderer に伝える。F11 以外 (OS の操作や Esc) で変わることもあるため
+  // 状態はウィンドウ側を正とし、renderer はこの通知で表示を合わせる
+  window.on('enter-full-screen', () => window.webContents.send(IPC.eventFullScreen, true))
+  window.on('leave-full-screen', () => window.webContents.send(IPC.eventFullScreen, false))
+
   // 外部リンクは既定のブラウザで開き、アプリ内での遷移は許可しない
   window.webContents.setWindowOpenHandler(({ url }) => {
     void shell.openExternal(url)

@@ -100,6 +100,13 @@ input {
   white-space: nowrap;
 }
 
+/* .input の width: 100% より優先させる */
+.input.toolbar__search {
+  flex: 0 1 220px;
+  width: 220px;
+  min-width: 120px;
+}
+
 .toolbar__field {
   display: flex;
   align-items: center;
@@ -225,6 +232,54 @@ select,
 
 .panel--tree {
   flex: 1 1 45%;
+}
+
+.panel--presets {
+  /* 数件なら中身の高さだけ。増えたらスクロールさせる */
+  flex: 0 0 auto;
+  max-height: 28%;
+}
+
+.panel--presets .panel__body {
+  flex: 0 1 auto;
+}
+
+.presets {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.presets__row {
+  display: block;
+  width: 100%;
+  overflow: hidden;
+  padding: 3px 6px;
+  border: 0;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.presets__row:hover {
+  background: #24242c;
+}
+
+.presets__row--editing {
+  padding: 1px 0;
+}
+
+.presets__add {
+  padding: 2px 0;
+}
+
+.presets__save {
+  margin-top: 2px;
 }
 
 .panel--tags {
@@ -444,6 +499,115 @@ select,
   background: var(--accent-dim);
 }
 
+/* 手で足したタグ。自動のものより枠を濃くして区別する */
+.chip--tag.chip--manual {
+  border-color: #8a8aa0;
+  border-width: 1.5px;
+}
+
+/* 単画像ビューのタグ。× は .chip の外に置き、ホバーしたときだけ出す */
+.tag-chip {
+  position: relative;
+  display: inline-flex;
+}
+
+.tag-chip__remove {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: var(--bg-elevated);
+  color: var(--text-dim);
+  font-size: 10px;
+  line-height: 14px;
+  cursor: pointer;
+  opacity: 0;
+}
+
+.tag-chip:hover .tag-chip__remove,
+.tag-chip__remove:focus-visible {
+  opacity: 1;
+}
+
+.tag-chip__remove:hover {
+  color: var(--text);
+}
+
+.input.tag-input {
+  width: 160px;
+  padding: 2px 8px;
+  border-radius: 999px;
+}
+
+.chip__count {
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.chip__remove {
+  padding: 0 0 0 2px;
+  border: 0;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.chip__remove:hover {
+  color: var(--text);
+}
+
+/* --------------------------------------------------------- selection bar */
+
+.selection-bar {
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-elevated);
+}
+
+.selection-bar__row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+}
+
+.selection-bar__count {
+  margin-right: 6px;
+  font-weight: 600;
+}
+
+.selection-bar__tags {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px 8px;
+}
+
+.selection-bar .input.tag-input {
+  width: 220px;
+}
+
+.selection-bar__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  max-height: 96px;
+  overflow: auto;
+}
+
+.button--danger:hover {
+  color: #ff8a8a;
+}
+
+.button--active {
+  color: var(--text);
+  background: var(--accent-dim);
+}
+
 .taglist {
   margin-top: 6px;
 }
@@ -566,7 +730,30 @@ select,
   outline: 2px solid var(--accent);
 }
 
+/* 選択中。ホバーより目立たせ、チェックを付ける */
+.cell--selected .cell__frame {
+  outline: 3px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.cell--selected .cell__frame::after {
+  content: '✓';
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 22px;
+  text-align: center;
+}
+
 .cell__frame {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -579,6 +766,43 @@ select,
   max-width: 100%;
   max-height: 100%;
   object-fit: contain;
+}
+
+/* お気に入りの ★。付いているものは常に、付いていないものはホバー時だけ出す */
+.cell__star {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: rgb(0 0 0 / 55%);
+  color: #c9c9d4;
+  font-size: 16px;
+  line-height: 26px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.1s ease;
+}
+
+.cell:hover .cell__star,
+.cell__star:focus-visible {
+  opacity: 1;
+}
+
+.cell__star--on {
+  color: #f5c84b;
+  opacity: 1;
+}
+
+.cell__star:hover {
+  background: rgb(0 0 0 / 75%);
+}
+
+.viewer__star--on {
+  color: #f5c84b;
 }
 
 .cell__caption {
@@ -632,6 +856,22 @@ select,
   /* 端に余白ができる場合だけ中央に寄せる。overflow 時に切れないよう margin で行う */
   margin: auto;
   max-width: none;
+}
+
+/*
+ * 回転中の外枠。大きさ (回した後の見た目) は JS で決め、中の画像を中央で回す。
+ * flex: none で、拡大時にステージに合わせて縮められないようにする。
+ */
+.viewer__rotor {
+  position: relative;
+  flex: none;
+  margin: auto;
+}
+
+.viewer__image--rotated {
+  position: absolute;
+  top: 50%;
+  left: 50%;
 }
 
 /*
@@ -694,6 +934,43 @@ select,
 
 .viewer__preload {
   display: none;
+}
+
+/* 全画面の単画像ビュー。画像以外 (ツールバー・案内・サイドバー) は出さない */
+.app--immersive .toolbar,
+.app--immersive .banner,
+.app--immersive .sidebar {
+  display: none;
+}
+
+/* バーとタグ欄の入れ物。通常はそのまま下に並べる */
+.viewer__dock {
+  display: flex;
+  flex-direction: column;
+}
+
+/*
+ * 全画面ではバーとタグ欄を隠して画像だけにする。
+ * 画面下端にマウスを寄せると、画像の上に重ねて出す (画像の大きさは変えない)。
+ */
+.viewer--immersive .viewer__dock {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 5;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(8px);
+  transition:
+    opacity 0.15s ease,
+    transform 0.15s ease;
+}
+
+.viewer--immersive .viewer__dock--revealed {
+  opacity: 1;
+  pointer-events: auto;
+  transform: none;
 }
 
 .viewer__bar {
@@ -982,6 +1259,11 @@ select,
   font: inherit;
   text-align: left;
   cursor: default;
+}
+
+/* 保存した条件のメニューは選択状態を持たないので、ホバーで示す */
+.panel--presets .context-menu__item:hover {
+  background: var(--accent-dim);
 }
 
 .context-menu__item--active {

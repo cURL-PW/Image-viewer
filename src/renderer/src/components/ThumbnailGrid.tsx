@@ -28,6 +28,9 @@ export default function ThumbnailGrid(): React.JSX.Element {
   const dir = useStore((state) => state.dir)
   const thumbnailSize = useStore((state) => state.settings?.thumbnailSize ?? 256)
   const thumbEpoch = useStore((state) => state.thumbEpoch)
+  const setFavorite = useStore((state) => state.setFavorite)
+  const selection = useStore((state) => state.selection)
+  const select = useStore((state) => state.select)
 
   const containerRef = useRef<HTMLDivElement>(null)
   const [viewport, setViewport] = useState({ width: 0, height: 0 })
@@ -109,6 +112,7 @@ export default function ThumbnailGrid(): React.JSX.Element {
   }, [visibleIds, ensureImages])
 
   const cellWidth = thumbnailSize
+  const selected = useMemo(() => new Set(selection), [selection])
 
   // 空のときもコンテナ自体は描画する。要素が消えると ResizeObserver が外れ、
   // 再表示時に幅が 0 のまま (= 1 列) になってしまうため。
@@ -142,7 +146,8 @@ export default function ThumbnailGrid(): React.JSX.Element {
             return (
               <div
                 key={id}
-                className="cell"
+                className={`cell${selected.has(id) ? ' cell--selected' : ''}`}
+                aria-selected={selected.has(id)}
                 style={{
                   width: `${cellWidth}px`,
                   height: `${cellHeight}px`,
@@ -150,13 +155,28 @@ export default function ThumbnailGrid(): React.JSX.Element {
                     PADDING + row * rowHeight
                   }px)`
                 }}
-                onDoubleClick={() => openViewer(index)}
+                onDoubleClick={(event) => {
+                  if (!event.ctrlKey && !event.metaKey && !event.shiftKey) openViewer(index)
+                }}
                 onClick={(event) => {
-                  // シングルクリックでも開けるようにする (ダブルクリックは従来どおり)
+                  // Ctrl (mac は Cmd) で 1 枚ずつ、Shift で範囲を選ぶ。開きはしない
+                  const additive = event.ctrlKey || event.metaKey
+                  if (event.shiftKey) {
+                    select(id, additive ? 'rangeAdd' : 'range')
+                    return
+                  }
+                  if (additive) {
+                    select(id, 'toggle')
+                    return
+                  }
+                  // 修飾キー無しは従来どおり開く。範囲選択の起点だけ覚えておく
+                  select(id, 'anchor')
                   if (event.detail === 1) openViewer(index)
                 }}
                 onContextMenu={(event) => {
                   event.preventDefault()
+                  // 選んでいない画像を右クリックしたら、その 1 枚だけを選び直す
+                  if (!selected.has(id)) select(id, 'replace')
                   openContextMenu({ x: event.clientX, y: event.clientY, id })
                 }}
                 title={image?.relPath ?? ''}
@@ -167,9 +187,30 @@ export default function ThumbnailGrid(): React.JSX.Element {
                       className="cell__image"
                       src={thumbUrl(image, thumbEpoch)}
                       alt={image.fileName}
+                      // 枠が正方形なので、収めた後に回してもはみ出さない
+                      style={
+                        image.rotation ? { transform: `rotate(${image.rotation}deg)` } : undefined
+                      }
                       loading="lazy"
                       draggable={false}
                     />
+                  )}
+                  {image && (
+                    <button
+                      type="button"
+                      className={`cell__star${image.favorite ? ' cell__star--on' : ''}`}
+                      title={image.favorite ? 'お気に入りから外す' : 'お気に入りに追加'}
+                      aria-label={image.favorite ? 'お気に入りから外す' : 'お気に入りに追加'}
+                      aria-pressed={image.favorite}
+                      // セルのクリックは単画像ビューを開くので、ここで止める
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        void setFavorite([id], !image.favorite)
+                      }}
+                      onDoubleClick={(event) => event.stopPropagation()}
+                    >
+                      {image.favorite ? '★' : '☆'}
+                    </button>
                   )}
                 </div>
                 <div className="cell__caption">{image?.fileName ?? ''}</div>

@@ -38,6 +38,10 @@ export interface ImageRecord {
   /** タグ付け済みのモデル ID。null なら未スキャン */
   scannedModel: string | null
   scanError: string | null
+  /** 表示上の回転 (時計回りの度数: 0 / 90 / 180 / 270)。元ファイルは変えない */
+  rotation: number
+  /** お気に入り (★) */
+  favorite: boolean
 }
 
 export interface FolderNode {
@@ -62,6 +66,8 @@ export interface ImageTag {
   name: string
   category: number
   confidence: number
+  /** 手で足したタグか */
+  manual?: boolean
 }
 
 export type SortKey = 'path' | 'name' | 'mtime' | 'size'
@@ -77,6 +83,34 @@ export interface ImageQuery {
   tagMode: TagMode
   sortKey: SortKey
   sortOrder: SortOrder
+  /**
+   * ファイル名・パスの検索語。ルートからの相対パスに部分一致 (大文字小文字は区別しない)。
+   * 空白区切りで複数語を入れると、すべてを含むものに絞る
+   */
+  search?: string
+  /** お気に入りだけに絞る */
+  favoritesOnly?: boolean
+}
+
+/**
+ * 保存した絞り込み条件の中身。
+ * フォルダは含めない (呼び出しても今見ているフォルダのまま条件だけを当てる)
+ */
+export interface SavedFilterData {
+  includeTags: number[]
+  excludeTags: number[]
+  tagMode: TagMode
+  search: string
+  favoritesOnly: boolean
+  sortKey: SortKey
+  sortOrder: SortOrder
+}
+
+/** 保存した絞り込み条件。ライブラリごとに持つ */
+export interface SavedFilter {
+  id: number
+  name: string
+  data: SavedFilterData
 }
 
 export interface QueryResult {
@@ -253,6 +287,19 @@ export const IPC = {
   queryImages: 'library:queryImages',
   getImages: 'library:getImages',
   getImageInfo: 'library:getImageInfo',
+  setRotation: 'library:setRotation',
+  setFavorite: 'library:setFavorite',
+  trashImages: 'library:trashImages',
+  copyText: 'library:copyText',
+  addTag: 'tags:add',
+  removeTag: 'tags:remove',
+  tagsForImages: 'tags:forImages',
+  suggestTags: 'tags:suggest',
+  listSavedFilters: 'filters:list',
+  saveFilter: 'filters:save',
+  renameSavedFilter: 'filters:rename',
+  deleteSavedFilter: 'filters:delete',
+  setFullScreen: 'window:setFullScreen',
   revealImage: 'library:revealImage',
   openImageExternal: 'library:openImageExternal',
   copyImage: 'library:copyImage',
@@ -275,7 +322,9 @@ export const IPC = {
   eventImageTagged: 'event:imageTagged',
   eventRootChanged: 'event:rootChanged',
   /** マウスの「戻る」ボタン (Windows の app-command 経由) */
-  eventGoBack: 'event:goBack'
+  eventGoBack: 'event:goBack',
+  /** ウィンドウの全画面状態が変わった (F11 以外、OS の操作で変わることもある) */
+  eventFullScreen: 'event:fullScreen'
 } as const
 
 /**
@@ -290,6 +339,14 @@ export type CopyKind = 'image' | 'path' | 'name' | 'tags' | 'tagsExcluded'
 
 export type ScanCommand = 'pause' | 'resume' | 'rescanAll' | 'retryErrors'
 
+/** ごみ箱へ移した結果 */
+export interface TrashResult {
+  /** 移せた画像の ID */
+  trashed: number[]
+  /** 移せなかった枚数 (他のアプリが開いている等) */
+  failed: number
+}
+
 export const IMAGE_PROTOCOL = 'app-image'
 export const THUMB_PROTOCOL = 'app-thumb'
 
@@ -302,6 +359,12 @@ export function imageUrl(image: Pick<ImageRecord, 'id' | 'mtime'>): string {
  * `epoch` は、未ダウンロードだったものが落ちてきたときに <img> を読み直させるための番号。
  * (雲タイルを表示済みの img は、URL が変わらない限り再要求しない)
  */
+/** 回転を 0 / 90 / 180 / 270 に揃える (負の値や 360 以上も受け付ける) */
+export function normalizeRotation(degrees: number): number {
+  if (!Number.isFinite(degrees)) return 0
+  return (((Math.round(degrees / 90) * 90) % 360) + 360) % 360
+}
+
 export function thumbUrl(image: Pick<ImageRecord, 'id' | 'mtime'>, epoch = 0): string {
   const suffix = epoch > 0 ? `&e=${epoch}` : ''
   return `${THUMB_PROTOCOL}://img/${image.id}?v=${image.mtime}${suffix}`

@@ -114,7 +114,7 @@ const closeWays: Record<string, () => Promise<void>> = {
         'browser-backward'
       )
     }),
-  '左下の ✕': () => window.locator('.viewer__bar .button--icon').click(),
+  '左下の ✕': () => window.getByRole('button', { name: '一覧へ戻る' }).click(),
   Esc: () => window.keyboard.press('Escape')
 }
 

@@ -58,6 +58,8 @@ export default function Toolbar(): React.JSX.Element {
   const scan = useStore((state) => state.scan)
   const setSettingsOpen = useStore((state) => state.setSettingsOpen)
   const total = useStore((state) => state.ids.length)
+  const search = useStore((state) => state.search)
+  const setSearch = useStore((state) => state.setSearch)
 
   const scanning = scan.state === 'running' || scan.state === 'preparing'
 
@@ -71,6 +73,18 @@ export default function Toolbar(): React.JSX.Element {
       </span>
 
       <span className="toolbar__count">{total.toLocaleString()} 枚</span>
+
+      {root && (
+        <input
+          type="search"
+          className="input toolbar__search"
+          placeholder="ファイル名・パスで検索"
+          aria-label="ファイル名・パスで検索"
+          title="空白で区切ると、すべての語を含むものに絞り込みます"
+          value={search}
+          onChange={(event) => setSearch(event.target.value)}
+        />
+      )}
 
       <label className="toolbar__field">
         並び順

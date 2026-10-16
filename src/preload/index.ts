@@ -22,6 +22,19 @@ const api: RendererApi = {
   getImages: (ids) => ipcRenderer.invoke(IPC.getImages, ids),
   getImageInfo: (id) => ipcRenderer.invoke(IPC.getImageInfo, id),
   revealImage: (id) => ipcRenderer.invoke(IPC.revealImage, id),
+  setRotation: (id, rotation) => ipcRenderer.invoke(IPC.setRotation, id, rotation),
+  setFullScreen: (fullScreen) => ipcRenderer.invoke(IPC.setFullScreen, fullScreen),
+  setFavorite: (ids, favorite) => ipcRenderer.invoke(IPC.setFavorite, ids, favorite),
+  listSavedFilters: () => ipcRenderer.invoke(IPC.listSavedFilters),
+  saveFilter: (name, data) => ipcRenderer.invoke(IPC.saveFilter, name, data),
+  renameSavedFilter: (id, name) => ipcRenderer.invoke(IPC.renameSavedFilter, id, name),
+  deleteSavedFilter: (id) => ipcRenderer.invoke(IPC.deleteSavedFilter, id),
+  trashImages: (ids) => ipcRenderer.invoke(IPC.trashImages, ids),
+  copyText: (ids, kind) => ipcRenderer.invoke(IPC.copyText, ids, kind),
+  addTag: (ids, name) => ipcRenderer.invoke(IPC.addTag, ids, name),
+  removeTag: (ids, tagId) => ipcRenderer.invoke(IPC.removeTag, ids, tagId),
+  tagsForImages: (ids) => ipcRenderer.invoke(IPC.tagsForImages, ids),
+  suggestTags: (text) => ipcRenderer.invoke(IPC.suggestTags, text),
   openImageExternal: (id) => ipcRenderer.invoke(IPC.openImageExternal, id),
   copyImage: (id, kind) => ipcRenderer.invoke(IPC.copyImage, id, kind),
   platform: process.platform,
@@ -43,7 +56,8 @@ const api: RendererApi = {
   onIndexProgress: (listener) => subscribe(IPC.eventIndexProgress, listener),
   onImageTagged: (listener) => subscribe(IPC.eventImageTagged, listener),
   onRootChanged: (listener) => subscribe(IPC.eventRootChanged, listener),
-  onGoBack: (listener) => subscribe(IPC.eventGoBack, listener)
+  onGoBack: (listener) => subscribe(IPC.eventGoBack, listener),
+  onFullScreen: (listener) => subscribe(IPC.eventFullScreen, listener)
 }
 
 contextBridge.exposeInMainWorld('api', api)
