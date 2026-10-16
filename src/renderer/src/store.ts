@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { normalizeRotation } from '@shared/types'
 import type {
   AppSettings,
   FolderNode,
@@ -60,6 +61,8 @@ interface State {
   contextMenu: ContextMenuState | null
   /** 画面下に一瞬だけ出す通知 (「コピーしました」など) */
   notice: { text: string; key: number } | null
+  /** ウィンドウが全画面か。main からの通知で合わせる */
+  fullScreen: boolean
 }
 
 export interface ContextMenuState {
@@ -97,6 +100,9 @@ interface Actions {
   openContextMenu(menu: ContextMenuState): void
   closeContextMenu(): void
   showNotice(text: string): void
+  setFullScreen(fullScreen: boolean): Promise<void>
+  /** 表示上の回転を 90° 単位で変える (正で時計回り)。DB に記憶し、サムネイルにも反映する */
+  rotate(id: number, delta: number): Promise<void>
 }
 
 const initialScan: ScanProgress = {
@@ -200,6 +206,7 @@ export const useStore = create<State & Actions>((set, get) => {
     thumbEpoch: 0,
     contextMenu: null,
     notice: null,
+    fullScreen: false,
 
     async init() {
       if (initStarted) return
@@ -255,6 +262,7 @@ export const useStore = create<State & Actions>((set, get) => {
         if (get().viewerIndex !== null) get().closeViewer()
       })
       window.api.onImageTagged(() => scheduleRefresh(TAGGED_DEBOUNCE))
+      window.api.onFullScreen((fullScreen) => set({ fullScreen }))
 
       void get().refreshLibraries()
       if (root) {
@@ -453,6 +461,25 @@ export const useStore = create<State & Actions>((set, get) => {
 
     showNotice(text) {
       set({ notice: { text, key: Date.now() } })
+    },
+
+    async setFullScreen(fullScreen) {
+      set({ fullScreen: await window.api.setFullScreen(fullScreen) })
+    },
+
+    async rotate(id, delta) {
+      const current = get().images[id]
+      if (!current) return
+      const target = normalizeRotation(current.rotation + delta * 90)
+      // 先に表示へ反映し、保存は後から追いかける (ボタンの反応を待たせない)
+      set((state) => ({ images: { ...state.images, [id]: { ...current, rotation: target } } }))
+      const saved = await window.api.setRotation(id, target)
+      if (saved !== target) {
+        set((state) => {
+          const image = state.images[id]
+          return image ? { images: { ...state.images, [id]: { ...image, rotation: saved } } } : {}
+        })
+      }
     }
   }
 })

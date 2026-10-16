@@ -38,6 +38,8 @@ export interface ImageRecord {
   /** タグ付け済みのモデル ID。null なら未スキャン */
   scannedModel: string | null
   scanError: string | null
+  /** 表示上の回転 (時計回りの度数: 0 / 90 / 180 / 270)。元ファイルは変えない */
+  rotation: number
 }
 
 export interface FolderNode {
@@ -253,6 +255,8 @@ export const IPC = {
   queryImages: 'library:queryImages',
   getImages: 'library:getImages',
   getImageInfo: 'library:getImageInfo',
+  setRotation: 'library:setRotation',
+  setFullScreen: 'window:setFullScreen',
   revealImage: 'library:revealImage',
   openImageExternal: 'library:openImageExternal',
   copyImage: 'library:copyImage',
@@ -275,7 +279,9 @@ export const IPC = {
   eventImageTagged: 'event:imageTagged',
   eventRootChanged: 'event:rootChanged',
   /** マウスの「戻る」ボタン (Windows の app-command 経由) */
-  eventGoBack: 'event:goBack'
+  eventGoBack: 'event:goBack',
+  /** ウィンドウの全画面状態が変わった (F11 以外、OS の操作で変わることもある) */
+  eventFullScreen: 'event:fullScreen'
 } as const
 
 /**
@@ -302,6 +308,12 @@ export function imageUrl(image: Pick<ImageRecord, 'id' | 'mtime'>): string {
  * `epoch` は、未ダウンロードだったものが落ちてきたときに <img> を読み直させるための番号。
  * (雲タイルを表示済みの img は、URL が変わらない限り再要求しない)
  */
+/** 回転を 0 / 90 / 180 / 270 に揃える (負の値や 360 以上も受け付ける) */
+export function normalizeRotation(degrees: number): number {
+  if (!Number.isFinite(degrees)) return 0
+  return (((Math.round(degrees / 90) * 90) % 360) + 360) % 360
+}
+
 export function thumbUrl(image: Pick<ImageRecord, 'id' | 'mtime'>, epoch = 0): string {
   const suffix = epoch > 0 ? `&e=${epoch}` : ''
   return `${THUMB_PROTOCOL}://img/${image.id}?v=${image.mtime}${suffix}`

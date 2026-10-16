@@ -123,7 +123,7 @@ test('左下の ✕ でグリッドへ戻れる (ページ送りの領域とか�
   await expect(window.locator('.viewer')).toBeVisible()
   await expect(window.locator('.viewer__tags')).toBeVisible()
 
-  await window.locator('.viewer__bar .button--icon').click()
+  await window.getByRole('button', { name: '一覧へ戻る' }).click()
   await expect(window.locator('.grid')).toBeVisible()
   await expect(window.locator('.viewer')).toHaveCount(0)
 })

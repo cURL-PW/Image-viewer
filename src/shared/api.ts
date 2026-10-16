@@ -43,6 +43,10 @@ export interface RendererApi {
   getImages(ids: number[]): Promise<ImageRecord[]>
   getImageInfo(id: number): Promise<ImageInfo>
   revealImage(id: number): Promise<void>
+  /** 表示上の回転を記憶する (元ファイルは変えない)。保存した値を返す */
+  setRotation(id: number, rotation: number): Promise<number>
+  /** ウィンドウの全画面を切り替える。切り替え後の状態を返す */
+  setFullScreen(fullScreen: boolean): Promise<boolean>
   /** OS の既定のアプリで開く */
   openImageExternal(id: number): Promise<void>
   /** 画像やパスをクリップボードへ入れる。入れるものが無ければ false */
@@ -74,4 +78,6 @@ export interface RendererApi {
   onRootChanged(listener: (root: RootInfo | null) => void): () => void
   /** マウスの「戻る」ボタン。DOM のイベントが来ない構成のための保険 */
   onGoBack(listener: () => void): () => void
+  /** 全画面の出入り (Esc や OS の操作で抜けた場合も来る) */
+  onFullScreen(listener: (fullScreen: boolean) => void): () => void
 }

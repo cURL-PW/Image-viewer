@@ -22,6 +22,8 @@ const api: RendererApi = {
   getImages: (ids) => ipcRenderer.invoke(IPC.getImages, ids),
   getImageInfo: (id) => ipcRenderer.invoke(IPC.getImageInfo, id),
   revealImage: (id) => ipcRenderer.invoke(IPC.revealImage, id),
+  setRotation: (id, rotation) => ipcRenderer.invoke(IPC.setRotation, id, rotation),
+  setFullScreen: (fullScreen) => ipcRenderer.invoke(IPC.setFullScreen, fullScreen),
   openImageExternal: (id) => ipcRenderer.invoke(IPC.openImageExternal, id),
   copyImage: (id, kind) => ipcRenderer.invoke(IPC.copyImage, id, kind),
   platform: process.platform,
@@ -43,7 +45,8 @@ const api: RendererApi = {
   onIndexProgress: (listener) => subscribe(IPC.eventIndexProgress, listener),
   onImageTagged: (listener) => subscribe(IPC.eventImageTagged, listener),
   onRootChanged: (listener) => subscribe(IPC.eventRootChanged, listener),
-  onGoBack: (listener) => subscribe(IPC.eventGoBack, listener)
+  onGoBack: (listener) => subscribe(IPC.eventGoBack, listener),
+  onFullScreen: (listener) => subscribe(IPC.eventFullScreen, listener)
 }
 
 contextBridge.exposeInMainWorld('api', api)

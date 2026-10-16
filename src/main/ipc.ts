@@ -16,7 +16,8 @@ import {
   type ScanProgress,
   type TagInfo,
   type CloudDiagnostics,
-  type CopyKind
+  type CopyKind,
+  normalizeRotation
 } from '@shared/types'
 import { closeRoot, cloudModeKey, openRoot, type AppContext } from './context'
 import { openImage } from './images'
@@ -143,6 +144,21 @@ export function registerIpcHandlers(ctx: AppContext): void {
   ipcMain.handle(IPC.revealImage, (_event, id: number): void => {
     const target = ctx.resolve(id)
     if (target) shell.showItemInFolder(target.fullPath)
+  })
+
+  ipcMain.handle(IPC.setRotation, (_event, id: number, rotation: number): number => {
+    const target = ctx.resolve(id)
+    if (!target) return 0
+    const normalized = normalizeRotation(Number(rotation))
+    ctx.db.setRotation(id, normalized)
+    return normalized
+  })
+
+  ipcMain.handle(IPC.setFullScreen, (event, fullScreen: boolean): boolean => {
+    const window = BrowserWindow.fromWebContents(event.sender)
+    if (!window) return false
+    window.setFullScreen(fullScreen === true)
+    return window.isFullScreen()
   })
 
   ipcMain.handle(IPC.openImageExternal, async (_event, id: number): Promise<void> => {

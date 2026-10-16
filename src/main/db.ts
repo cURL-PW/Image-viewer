@@ -34,7 +34,7 @@ export interface TagResult {
   confidence: number
 }
 
-const SCHEMA_VERSION = 1
+const SCHEMA_VERSION = 2
 
 /**
  * ファイル名中の数字列をゼロ埋めして自然順ソート用のキーを作る。
@@ -87,8 +87,23 @@ export class LibraryDb {
 
   private migrate(): void {
     const row = this.db.prepare('PRAGMA user_version').get() as { user_version: number } | undefined
-    if ((row?.user_version ?? 0) >= SCHEMA_VERSION) return
+    const version = row?.user_version ?? 0
+    if (version >= SCHEMA_VERSION) return
 
+    if (version < 1) this.createBaseTables()
+    // v2: 画像ごとの表示上の回転
+    if (version < 2) this.addColumn('images', 'rotation', 'INTEGER NOT NULL DEFAULT 0')
+    this.db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`)
+  }
+
+  /** 既に列があれば何もしない (途中で失敗した移行をやり直せるように) */
+  private addColumn(table: string, column: string, definition: string): void {
+    const columns = this.db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]
+    if (columns.some((entry) => entry.name === column)) return
+    this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`)
+  }
+
+  private createBaseTables(): void {
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS roots (
         id   INTEGER PRIMARY KEY,
@@ -133,7 +148,6 @@ export class LibraryDb {
       CREATE INDEX IF NOT EXISTS idx_images_unscanned ON images(root_id, scanned_model);
       CREATE INDEX IF NOT EXISTS idx_image_tags_tag   ON image_tags(tag_id);
     `)
-    this.db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`)
   }
 
   close(): void {
@@ -319,6 +333,11 @@ export class LibraryDb {
 
   setDimensions(id: number, width: number, height: number): void {
     this.db.prepare('UPDATE images SET width = ?, height = ? WHERE id = ?').run(width, height, id)
+  }
+
+  /** 表示上の回転を記憶する。ファイルの内容が変わっても残す (タグとは違い画像の見え方の好みなので) */
+  setRotation(id: number, rotation: number): void {
+    this.db.prepare('UPDATE images SET rotation = ? WHERE id = ?').run(rotation, id)
   }
 
   // ---------------------------------------------------------------- query
@@ -541,7 +560,7 @@ export class LibraryDb {
 
 // ------------------------------------------------------------------ utils
 
-const IMAGE_COLUMNS = `id, rel_path, dir_path, file_name, mtime, size, width, height, scanned_model, scan_error`
+const IMAGE_COLUMNS = `id, rel_path, dir_path, file_name, mtime, size, width, height, scanned_model, scan_error, rotation`
 
 interface RawImage {
   id: number
@@ -554,6 +573,7 @@ interface RawImage {
   height: number | null
   scanned_model: string | null
   scan_error: string | null
+  rotation: number
 }
 
 function toImageRecord(row: RawImage): ImageRecord {
@@ -567,7 +587,8 @@ function toImageRecord(row: RawImage): ImageRecord {
     width: row.width,
     height: row.height,
     scannedModel: row.scanned_model,
-    scanError: row.scan_error
+    scanError: row.scan_error,
+    rotation: row.rotation
   }
 }
 

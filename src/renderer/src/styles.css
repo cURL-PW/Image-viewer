@@ -635,6 +635,22 @@ select,
 }
 
 /*
+ * 回転中の外枠。大きさ (回した後の見た目) は JS で決め、中の画像を中央で回す。
+ * flex: none で、拡大時にステージに合わせて縮められないようにする。
+ */
+.viewer__rotor {
+  position: relative;
+  flex: none;
+  margin: auto;
+}
+
+.viewer__image--rotated {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+}
+
+/*
  * 既定の「全体表示」。はみ出さない範囲で最大にし、元より大きくはしない。
  * 幅を JS で指定しないので、読み込み直後に大きさが跳ねることもない。
  */
@@ -694,6 +710,43 @@ select,
 
 .viewer__preload {
   display: none;
+}
+
+/* 全画面の単画像ビュー。画像以外 (ツールバー・案内・サイドバー) は出さない */
+.app--immersive .toolbar,
+.app--immersive .banner,
+.app--immersive .sidebar {
+  display: none;
+}
+
+/* バーとタグ欄の入れ物。通常はそのまま下に並べる */
+.viewer__dock {
+  display: flex;
+  flex-direction: column;
+}
+
+/*
+ * 全画面ではバーとタグ欄を隠して画像だけにする。
+ * 画面下端にマウスを寄せると、画像の上に重ねて出す (画像の大きさは変えない)。
+ */
+.viewer--immersive .viewer__dock {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 5;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(8px);
+  transition:
+    opacity 0.15s ease,
+    transform 0.15s ease;
+}
+
+.viewer--immersive .viewer__dock--revealed {
+  opacity: 1;
+  pointer-events: auto;
+  transform: none;
 }
 
 .viewer__bar {

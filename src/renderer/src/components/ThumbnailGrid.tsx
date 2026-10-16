@@ -167,6 +167,10 @@ export default function ThumbnailGrid(): React.JSX.Element {
                       className="cell__image"
                       src={thumbUrl(image, thumbEpoch)}
                       alt={image.fileName}
+                      // 枠が正方形なので、収めた後に回してもはみ出さない
+                      style={
+                        image.rotation ? { transform: `rotate(${image.rotation}deg)` } : undefined
+                      }
                       loading="lazy"
                       draggable={false}
                     />

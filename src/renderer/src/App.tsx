@@ -17,6 +17,9 @@ export default function App(): React.JSX.Element {
   const viewerIndex = useStore((state) => state.viewerIndex)
   const settingsOpen = useStore((state) => state.settingsOpen)
   const openFolder = useStore((state) => state.openFolder)
+  const fullScreen = useStore((state) => state.fullScreen)
+  /** 全画面の単画像ビューでは、ツールバーやサイドバーも隠して画像だけにする */
+  const immersive = fullScreen && viewerIndex !== null
 
   useEffect(() => {
     void init()
@@ -25,17 +28,35 @@ export default function App(): React.JSX.Element {
   // グローバルなキーボード操作。入力欄にフォーカスがあるときは邪魔しない。
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
+      const state = useStore.getState()
+      // 全画面はどの画面でも (入力欄にいても) 切り替えられる
+      if (event.key === 'F11') {
+        event.preventDefault()
+        void state.setFullScreen(!state.fullScreen)
+        return
+      }
+
       const target = event.target as HTMLElement | null
       if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return
-
-      const state = useStore.getState()
       if (state.settingsOpen) {
         if (event.key === 'Escape') state.setSettingsOpen(false)
         return
       }
+      // Esc は「全画面を抜ける」を優先する。もう一度押すと一覧へ戻る
+      if (event.key === 'Escape' && state.fullScreen) {
+        event.preventDefault()
+        void state.setFullScreen(false)
+        return
+      }
       if (state.viewerIndex === null) return
 
+      const currentId = state.ids[state.viewerIndex]
       switch (event.key) {
+        case 'r':
+        case 'R':
+          if (event.ctrlKey || event.metaKey || event.altKey) return
+          void state.rotate(currentId, event.shiftKey ? -1 : 1)
+          break
         case 'ArrowRight':
         case 'PageDown':
           state.step(1)
@@ -64,7 +85,7 @@ export default function App(): React.JSX.Element {
   }, [])
 
   return (
-    <div className="app">
+    <div className={`app${immersive ? ' app--immersive' : ''}`}>
       <Toolbar />
       <CloudBanner />
       <div className="app__body">

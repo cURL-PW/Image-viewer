@@ -218,7 +218,21 @@ chokidar でルートフォルダを再帰 watch し、イベントを次のと�
   - ダブルクリック(または `0` キー)で全体表示に復帰。画像切替時も全体表示にリセット
   - 左右端のクリック領域は**ステージの中だけ**に収める。ビューア直下に絶対配置すると
     下のバー(✕ など)まで覆ってしまい、しかもタグ欄の開閉で覆う量が変わる
-- **キーボード**: `←`/`→` 前後の画像、`Home`/`End` 先頭/末尾、`Esc` グリッドへ戻る、`+`/`-` ズーム
+- **全画面**: `F11` またはバーの「全画面」で切り替える(グリッドでも効く)。状態は記憶しない
+  - 単画像ビューで全画面のときは、ツールバー・サイドバー・下のバー・タグ欄を隠して画像だけにする。
+    画面下端 80px にマウスを寄せるとバーとタグ欄を画像の上に重ねて出す(画像の大きさは変えない)
+  - グリッドで全画面のときは OS のタイトルバーが消えるだけで、ツールバーとサイドバーはそのまま
+  - `Esc` は全画面を抜けるのが先。もう一度押すとグリッドへ戻る
+  - 全画面の状態はウィンドウ側を正とし、`enter-full-screen` / `leave-full-screen` を renderer へ伝える
+- **回転**: `R` で右(時計回り)、`Shift+R` で左に 90° 回す。バーにもボタンを置く
+  - 表示上の回転だけで、元ファイルは変更しない。画像ごとに DB (`images.rotation`) へ記憶し、
+    サムネイルにも反映する。ファイルの内容が変わっても回転は残す
+  - 回した後の向きで全体表示・ズーム・パン・ページ送りがそのまま使える。回すと全体表示に戻す
+  - 90° / 270° では CSS の `max-width` / `max-height` が回す前の大きさで判定されるため、
+    回した後の外枠を JS で決め、その中央で元の向きの画像を回す。回さないときは従来どおり CSS に任せる
+  - サムネイルは枠が正方形なので、収めた画像を CSS で回すだけではみ出さない
+- **キーボード**: `←`/`→` 前後の画像、`Home`/`End` 先頭/末尾、`Esc` グリッドへ戻る、`+`/`-` ズーム、
+  `R` / `Shift+R` 回転、`F11` 全画面
 - **マウスの戻るボタン**: グリッドへ戻る(✕ と同じ)。renderer の `mousedown` (button 3) と、
   Windows の `app-command` (`browser-backward`) の両方で受ける
 - **情報表示**: ファイル名・インデックス(n / N)・解像度・付与タグ一覧をオーバーレイ/パネルで表示(トグル可)
@@ -305,6 +319,8 @@ chokidar でルートフォルダを再帰 watch し、イベントを次のと�
 | `library:getTree` | R→M | フォルダ階層ツリー(枚数付き)取得 |
 | `library:queryImages` | R→M | 画像一覧クエリ `{folder, recursive, tags:{include, exclude, mode}, sort, offset, limit}` |
 | `library:getImageInfo` | R→M | 単画像のメタ情報 + タグ一覧 |
+| `library:setRotation` | R→M | 表示上の回転を記憶する(0 / 90 / 180 / 270) |
+| `window:setFullScreen` | R→M | ウィンドウの全画面を切り替える |
 | `library:openImageExternal` | R→M | OS の既定アプリで画像を開く |
 | `library:copyImage` | R→M | 画像 / パス / ファイル名 / タグをクリップボードへ |
 | `tags:list` | R→M | タグ一覧(スコープ内出現数付き、検索文字列) |
@@ -313,6 +329,7 @@ chokidar でルートフォルダを再帰 watch し、イベントを次のと�
 | `event:libraryChanged` | M→R | 追加/変更/削除の差分通知(watch 由来) |
 | `event:scanProgress` | M→R | スキャン進捗 `{done, total, current, provider}` |
 | `event:imageTagged` | M→R | 個別画像のタグ付け完了通知 |
+| `event:fullScreen` | M→R | 全画面の出入り(OS の操作で変わった場合も) |
 
 ### 4.3 DB スキーマ(SQLite)
 
@@ -329,6 +346,7 @@ CREATE TABLE images (
   height     INTEGER,
   scanned_model TEXT,                -- タグ付け済みモデル ID(NULL = 未スキャン)
   scan_error TEXT,
+  rotation   INTEGER NOT NULL DEFAULT 0, -- 表示上の回転(v2 で追加)
   UNIQUE (root_id, rel_path)
 );
 
