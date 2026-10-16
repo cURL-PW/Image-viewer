@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { CopyKind } from '@shared/types'
+import { confirmAndTrash } from '../lib/trash'
 import { useStore } from '../store'
 
 /** 画面端からこれだけは離して表示する */
@@ -50,6 +51,7 @@ export default function ImageContextMenu(): React.JSX.Element | null {
   const close = useStore((state) => state.closeContextMenu)
   const viewerIndex = useStore((state) => state.viewerIndex)
   const images = useStore((state) => state.images)
+  const selection = useStore((state) => state.selection)
   const excludeCount = useStore((state) => state.settings?.copyExcludeTags.length ?? 0)
   const ref = useRef<HTMLDivElement>(null)
   const [position, setPosition] = useState<{ left: number; top: number } | null>(null)
@@ -120,10 +122,22 @@ export default function ImageContextMenu(): React.JSX.Element | null {
   }
 
   const favorite = images[id]?.favorite ?? false
+  // 選択中の画像を右クリックしたら、選んだ全部にかける (一覧で 2 枚以上選んでいるとき)
+  const multi = viewerIndex === null && selection.length >= 2 && selection.includes(id)
+  const targets = multi ? selection : [id]
+  const count = targets.length
+
+  const copyLines = async (kind: 'path' | 'name'): Promise<void> => {
+    const ok = await window.api.copyText(targets, kind)
+    const what = kind === 'path' ? 'パス' : 'ファイル名'
+    useStore
+      .getState()
+      .showNotice(ok ? `${count} 枚の${what}をコピーしました` : 'コピーできませんでした')
+  }
 
   const entries: Entry[] = []
   // 単画像ビューでは今まさに開いているので出さない
-  if (viewerIndex === null) {
+  if (viewerIndex === null && !multi) {
     entries.push({
       label: '開く',
       action: () => {
@@ -133,17 +147,37 @@ export default function ImageContextMenu(): React.JSX.Element | null {
       }
     })
   }
+  // 1 枚にしか意味の無い項目 (開く・画像のコピー等) は、右クリックした 1 枚にかける
   entries.push(
     { label: '既定のアプリで開く', action: () => window.api.openImageExternal(id) },
-    { label: revealLabel(window.api.platform), action: () => window.api.revealImage(id) },
-    {
+    { label: revealLabel(window.api.platform), action: () => window.api.revealImage(id) }
+  )
+  if (multi) {
+    entries.push(
+      {
+        label: `${count} 枚をお気に入りに追加`,
+        action: () => useStore.getState().setFavorite(targets, true)
+      },
+      {
+        label: `${count} 枚をお気に入りから外す`,
+        action: () => useStore.getState().setFavorite(targets, false)
+      }
+    )
+  } else {
+    entries.push({
       label: favorite ? 'お気に入りから外す' : 'お気に入りに追加',
       action: () => useStore.getState().setFavorite([id], !favorite)
-    },
+    })
+  }
+  entries.push(
     'separator',
     { label: '画像をコピー', action: () => copy('image') },
-    { label: 'パスをコピー', action: () => copy('path') },
-    { label: 'ファイル名をコピー', action: () => copy('name') },
+    multi
+      ? { label: `${count} 枚のパスをコピー`, action: () => copyLines('path') }
+      : { label: 'パスをコピー', action: () => copy('path') },
+    multi
+      ? { label: `${count} 枚のファイル名をコピー`, action: () => copyLines('name') }
+      : { label: 'ファイル名をコピー', action: () => copy('name') },
     { label: 'タグをコピー', action: () => copy('tags'), disabled: hasTags !== true },
     {
       label: 'タグをコピー (除外あり)',
@@ -151,6 +185,11 @@ export default function ImageContextMenu(): React.JSX.Element | null {
       disabled: hasTags !== true || excludeCount === 0,
       // 除外ルールが無いと押せないので、どこで登録するかを示す
       hint: excludeCount === 0 ? '設定の「コピーから除外するタグ」で登録すると使えます' : undefined
+    },
+    'separator',
+    {
+      label: multi ? `${count} 枚をごみ箱へ移動` : 'ごみ箱へ移動',
+      action: () => confirmAndTrash(targets)
     }
   )
   const items = entries.filter((entry): entry is Item => entry !== 'separator')

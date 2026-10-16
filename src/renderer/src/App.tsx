@@ -5,6 +5,8 @@ import ImageContextMenu from './components/ImageContextMenu'
 import ImageViewer from './components/ImageViewer'
 import LibraryList from './components/LibraryList'
 import SavedFilters from './components/SavedFilters'
+import SelectionBar from './components/SelectionBar'
+import { confirmAndTrash } from './lib/trash'
 import Notice from './components/Notice'
 import SettingsDialog from './components/SettingsDialog'
 import TagFilter from './components/TagFilter'
@@ -49,7 +51,20 @@ export default function App(): React.JSX.Element {
         void state.setFullScreen(false)
         return
       }
-      if (state.viewerIndex === null) return
+      if (state.viewerIndex === null) {
+        // 一覧での選択の操作
+        if ((event.ctrlKey || event.metaKey) && (event.key === 'a' || event.key === 'A')) {
+          event.preventDefault()
+          state.selectAll()
+        } else if (event.key === 'Escape' && state.selection.length > 0) {
+          event.preventDefault()
+          state.clearSelection()
+        } else if (event.key === 'Delete' && state.selection.length > 0) {
+          event.preventDefault()
+          confirmAndTrash(state.selection)
+        }
+        return
+      }
 
       const currentId = state.ids[state.viewerIndex]
       switch (event.key) {
@@ -65,6 +80,9 @@ export default function App(): React.JSX.Element {
           if (image) void state.setFavorite([currentId], !image.favorite)
           break
         }
+        case 'Delete':
+          confirmAndTrash([currentId])
+          break
         case 'ArrowRight':
         case 'PageDown':
           state.step(1)
@@ -117,7 +135,10 @@ export default function App(): React.JSX.Element {
               </button>
             </div>
           ) : viewerIndex === null ? (
-            <ThumbnailGrid />
+            <>
+              <SelectionBar />
+              <ThumbnailGrid />
+            </>
           ) : (
             <ImageViewer />
           )}

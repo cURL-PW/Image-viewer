@@ -19,6 +19,7 @@ import {
   type CopyKind,
   type SavedFilter,
   type SavedFilterData,
+  type TrashResult,
   normalizeRotation
 } from '@shared/types'
 import { closeRoot, cloudModeKey, openRoot, type AppContext } from './context'
@@ -181,6 +182,63 @@ export function registerIpcHandlers(ctx: AppContext): void {
     if (rootId === null || !Array.isArray(ids)) return
     ctx.db.setFavorite(rootId, ids, favorite === true)
   })
+
+  // ごみ箱へ移す。OS のごみ箱を使うので、間違えても元に戻せる。
+  // 未ダウンロードのクラウドファイルも、中身を読まずにそのまま移せる
+  ipcMain.handle(IPC.trashImages, async (_event, ids: number[]): Promise<TrashResult> => {
+    const trashed: number[] = []
+    let failed = 0
+    for (const id of Array.isArray(ids) ? ids : []) {
+      const target = ctx.resolve(id)
+      if (!target) {
+        failed += 1
+        continue
+      }
+      try {
+        await shell.trashItem(target.fullPath)
+        trashed.push(id)
+      } catch {
+        failed += 1
+      }
+    }
+    ctx.library.forget(trashed)
+    return { trashed, failed }
+  })
+
+  ipcMain.handle(
+    IPC.copyText,
+    (_event, ids: number[], kind: 'path' | 'name'): boolean => {
+      const lines = (Array.isArray(ids) ? ids : [])
+        .map((id) => ctx.resolve(id))
+        .filter((target) => target !== null)
+        .map((target) => (kind === 'name' ? target.record.fileName : target.fullPath))
+      if (lines.length === 0) return false
+      clipboard.writeText(lines.join('\n'))
+      return true
+    }
+  )
+
+  ipcMain.handle(IPC.addTag, (_event, ids: number[], name: string): void => {
+    const rootId = ctx.library.currentRootId
+    if (rootId === null || !Array.isArray(ids) || typeof name !== 'string') return
+    ctx.db.addManualTag(rootId, ids, name.slice(0, 200))
+  })
+
+  ipcMain.handle(IPC.removeTag, (_event, ids: number[], tagId: number): void => {
+    const rootId = ctx.library.currentRootId
+    if (rootId === null || !Array.isArray(ids)) return
+    ctx.db.removeManualTag(rootId, ids, tagId)
+  })
+
+  ipcMain.handle(IPC.tagsForImages, (_event, ids: number[]): TagInfo[] => {
+    const rootId = ctx.library.currentRootId
+    if (rootId === null || !Array.isArray(ids)) return []
+    return ctx.db.tagsForImages(rootId, ids)
+  })
+
+  ipcMain.handle(IPC.suggestTags, (_event, text: string): string[] =>
+    typeof text === 'string' ? ctx.db.suggestTags(text, 20) : []
+  )
 
   ipcMain.handle(IPC.listSavedFilters, (): SavedFilter[] => listSavedFilters(ctx))
 

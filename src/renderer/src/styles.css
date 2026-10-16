@@ -499,6 +499,115 @@ select,
   background: var(--accent-dim);
 }
 
+/* 手で足したタグ。自動のものより枠を濃くして区別する */
+.chip--tag.chip--manual {
+  border-color: #8a8aa0;
+  border-width: 1.5px;
+}
+
+/* 単画像ビューのタグ。× は .chip の外に置き、ホバーしたときだけ出す */
+.tag-chip {
+  position: relative;
+  display: inline-flex;
+}
+
+.tag-chip__remove {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: var(--bg-elevated);
+  color: var(--text-dim);
+  font-size: 10px;
+  line-height: 14px;
+  cursor: pointer;
+  opacity: 0;
+}
+
+.tag-chip:hover .tag-chip__remove,
+.tag-chip__remove:focus-visible {
+  opacity: 1;
+}
+
+.tag-chip__remove:hover {
+  color: var(--text);
+}
+
+.input.tag-input {
+  width: 160px;
+  padding: 2px 8px;
+  border-radius: 999px;
+}
+
+.chip__count {
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.chip__remove {
+  padding: 0 0 0 2px;
+  border: 0;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.chip__remove:hover {
+  color: var(--text);
+}
+
+/* --------------------------------------------------------- selection bar */
+
+.selection-bar {
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-elevated);
+}
+
+.selection-bar__row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+}
+
+.selection-bar__count {
+  margin-right: 6px;
+  font-weight: 600;
+}
+
+.selection-bar__tags {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px 8px;
+}
+
+.selection-bar .input.tag-input {
+  width: 220px;
+}
+
+.selection-bar__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  max-height: 96px;
+  overflow: auto;
+}
+
+.button--danger:hover {
+  color: #ff8a8a;
+}
+
+.button--active {
+  color: var(--text);
+  background: var(--accent-dim);
+}
+
 .taglist {
   margin-top: 6px;
 }
@@ -619,6 +728,28 @@ select,
 
 .cell:hover .cell__frame {
   outline: 2px solid var(--accent);
+}
+
+/* 選択中。ホバーより目立たせ、チェックを付ける */
+.cell--selected .cell__frame {
+  outline: 3px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.cell--selected .cell__frame::after {
+  content: '✓';
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 22px;
+  text-align: center;
 }
 
 .cell__frame {

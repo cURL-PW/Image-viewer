@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { ImageInfo } from '@shared/api'
 import { TagCategory, imageUrl } from '@shared/types'
+import { confirmAndTrash } from '../lib/trash'
 import { useStore } from '../store'
+import TagInput from './TagInput'
 
 const MIN_SCALE = 0.1
 const MAX_SCALE = 8
@@ -60,6 +62,9 @@ export default function ImageViewer(): React.JSX.Element | null {
   const setFullScreen = useStore((state) => state.setFullScreen)
   const rotate = useStore((state) => state.rotate)
   const setFavorite = useStore((state) => state.setFavorite)
+  const addTag = useStore((state) => state.addTag)
+  const removeTag = useStore((state) => state.removeTag)
+  const tagsVersion = useStore((state) => state.tagsVersion)
 
   const viewerRef = useRef<HTMLDivElement>(null)
   const stageRef = useRef<HTMLDivElement>(null)
@@ -158,7 +163,8 @@ export default function ImageViewer(): React.JSX.Element | null {
     return () => {
       cancelled = true
     }
-  }, [currentId])
+    // tagsVersion: 手でタグを足したり外したりしたら読み直す
+  }, [currentId, tagsVersion])
 
   // ズーム倍率が変わった直後に、カーソル位置が動かないようスクロールを補正する
   useLayoutEffect(() => {
@@ -472,6 +478,15 @@ export default function ImageViewer(): React.JSX.Element | null {
           </button>
           <button
             type="button"
+            className="button button--icon"
+            onClick={() => confirmAndTrash([currentId])}
+            title="ごみ箱へ移動 (Delete)"
+            aria-label="ごみ箱へ移動"
+          >
+            🗑
+          </button>
+          <button
+            type="button"
             className="button button--subtle"
             onClick={() => void window.api.revealImage(currentId)}
           >
@@ -496,18 +511,36 @@ export default function ImageViewer(): React.JSX.Element | null {
               </span>
             ) : (
               info.tags.map((tag) => (
-                <button
-                  key={tag.id}
-                  type="button"
-                  className={`chip chip--tag ${tagClass(tag.category)}${
-                    includeTags.includes(tag.id) ? ' chip--active' : ''
-                  }`}
-                  title={`確信度 ${(tag.confidence * 100).toFixed(1)}% — クリックでこのタグに絞り込む`}
-                  onClick={() => toggleInclude(tag.id)}
-                >
-                  {tag.name}
-                </button>
+                // × は .chip の外に置く (チップの文字列にタグ名だけが入るように)
+                <span key={tag.id} className="tag-chip">
+                  <button
+                    type="button"
+                    className={`chip chip--tag ${tagClass(tag.category)}${
+                      includeTags.includes(tag.id) ? ' chip--active' : ''
+                    }${tag.manual ? ' chip--manual' : ''}`}
+                    title={
+                      tag.manual
+                        ? '手で足したタグ — クリックでこのタグに絞り込む'
+                        : `確信度 ${(tag.confidence * 100).toFixed(1)}% — クリックでこのタグに絞り込む`
+                    }
+                    onClick={() => toggleInclude(tag.id)}
+                  >
+                    {tag.name}
+                  </button>
+                  <button
+                    type="button"
+                    className="tag-chip__remove"
+                    title="このタグを外す (付け直しでも戻りません)"
+                    aria-label={`${tag.name} を外す`}
+                    onClick={() => void removeTag([currentId], tag.id)}
+                  >
+                    ×
+                  </button>
+                </span>
               ))
+            )}
+            {info !== null && (
+              <TagInput onSubmit={(name) => void addTag([currentId], name)} />
             )}
           </div>
         )}

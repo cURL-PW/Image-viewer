@@ -66,6 +66,8 @@ export interface ImageTag {
   name: string
   category: number
   confidence: number
+  /** 手で足したタグか */
+  manual?: boolean
 }
 
 export type SortKey = 'path' | 'name' | 'mtime' | 'size'
@@ -287,6 +289,12 @@ export const IPC = {
   getImageInfo: 'library:getImageInfo',
   setRotation: 'library:setRotation',
   setFavorite: 'library:setFavorite',
+  trashImages: 'library:trashImages',
+  copyText: 'library:copyText',
+  addTag: 'tags:add',
+  removeTag: 'tags:remove',
+  tagsForImages: 'tags:forImages',
+  suggestTags: 'tags:suggest',
   listSavedFilters: 'filters:list',
   saveFilter: 'filters:save',
   renameSavedFilter: 'filters:rename',
@@ -330,6 +338,14 @@ export const IPC = {
 export type CopyKind = 'image' | 'path' | 'name' | 'tags' | 'tagsExcluded'
 
 export type ScanCommand = 'pause' | 'resume' | 'rescanAll' | 'retryErrors'
+
+/** ごみ箱へ移した結果 */
+export interface TrashResult {
+  /** 移せた画像の ID */
+  trashed: number[]
+  /** 移せなかった枚数 (他のアプリが開いている等) */
+  failed: number
+}
 
 export const IMAGE_PROTOCOL = 'app-image'
 export const THUMB_PROTOCOL = 'app-thumb'
