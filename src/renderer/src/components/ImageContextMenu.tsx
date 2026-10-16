@@ -169,6 +169,14 @@ export default function ImageContextMenu(): React.JSX.Element | null {
       action: () => useStore.getState().setFavorite([id], !favorite)
     })
   }
+  if (!multi) {
+    entries.push({
+      label: '似た画像を探す',
+      action: () => useStore.getState().showSimilar(id),
+      disabled: hasTags !== true,
+      hint: hasTags === false ? 'タグが付いていない画像では探せません' : undefined
+    })
+  }
   entries.push(
     'separator',
     { label: '画像をコピー', action: () => copy('image') },

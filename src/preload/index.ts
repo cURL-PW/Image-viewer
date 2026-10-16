@@ -34,6 +34,7 @@ const api: RendererApi = {
   addTag: (ids, name) => ipcRenderer.invoke(IPC.addTag, ids, name),
   removeTag: (ids, tagId) => ipcRenderer.invoke(IPC.removeTag, ids, tagId),
   tagsForImages: (ids) => ipcRenderer.invoke(IPC.tagsForImages, ids),
+  findSimilar: (id) => ipcRenderer.invoke(IPC.findSimilar, id),
   suggestTags: (text) => ipcRenderer.invoke(IPC.suggestTags, text),
   openImageExternal: (id) => ipcRenderer.invoke(IPC.openImageExternal, id),
   copyImage: (id, kind) => ipcRenderer.invoke(IPC.copyImage, id, kind),
@@ -57,7 +58,8 @@ const api: RendererApi = {
   onImageTagged: (listener) => subscribe(IPC.eventImageTagged, listener),
   onRootChanged: (listener) => subscribe(IPC.eventRootChanged, listener),
   onGoBack: (listener) => subscribe(IPC.eventGoBack, listener),
-  onFullScreen: (listener) => subscribe(IPC.eventFullScreen, listener)
+  onFullScreen: (listener) => subscribe(IPC.eventFullScreen, listener),
+  onThumbZoom: (listener) => subscribe(IPC.eventThumbZoom, listener)
 }
 
 contextBridge.exposeInMainWorld('api', api)

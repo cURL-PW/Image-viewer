@@ -1,5 +1,10 @@
 import { create } from 'zustand'
-import { normalizeRotation } from '@shared/types'
+import {
+  THUMBNAIL_SIZE_DEFAULT,
+  THUMBNAIL_SIZE_STEP,
+  clampThumbnailSize,
+  normalizeRotation
+} from '@shared/types'
 import type {
   AppSettings,
   FolderNode,
@@ -19,7 +24,11 @@ import type {
 
 /** 選択を解除した状態。フォルダや絞り込みを切り替えたときに使う */
 const NO_SELECTION = { selection: [] as number[], selectionAnchor: null as number | null }
+/** フォルダや絞り込みを切り替えたときの共通の後始末。選択を解除し、似た画像の表示もやめる */
+const RESET_VIEW = { ...NO_SELECTION, similarTo: null as number | null }
 
+/** サムネイルの大きさを変えてから保存するまでの待ち時間 (ms)。続けて回したときに 1 回で済ませる */
+const THUMB_SAVE_DEBOUNCE = 300
 /** ファイル名検索の入力が止まってから絞り込むまでの待ち時間 (ms) */
 const SEARCH_DEBOUNCE = 300
 /** ライブラリ変更後の再クエリをまとめるための待ち時間 (ms) */
@@ -81,6 +90,8 @@ interface State {
   selectionAnchor: number | null
   /** 手動タグを変えるたびに増やす。単画像ビューのタグ欄を読み直させるため */
   tagsVersion: number
+  /** 似た画像を表示中なら、元の画像の ID。フォルダや絞り込みを変えると解除する */
+  similarTo: number | null
 }
 
 /** グリッドのクリックでの選択のしかた */
@@ -143,6 +154,15 @@ interface Actions {
   trashImages(ids: number[]): Promise<void>
   addTag(ids: number[], name: string): Promise<void>
   removeTag(ids: number[], tagId: number): Promise<void>
+  /**
+   * サムネイルの大きさを段階的に変える (Ctrl + ホイール / Ctrl + - 0)。
+   * 正で大きく、負で小さく、0 で既定に戻す。表示はすぐ変え、保存は少し遅らせてまとめる
+   */
+  zoomThumbnails(delta: number): void
+  /** ライブラリ全体から、タグの似ている画像を似ている順に並べる */
+  showSimilar(id: number): void
+  /** 似た画像の表示をやめ、元の絞り込みに戻る */
+  exitSimilar(): void
 }
 
 const initialScan: ScanProgress = {
@@ -163,6 +183,7 @@ const initialScan: ScanProgress = {
 export const useStore = create<State & Actions>((set, get) => {
   let requeryTimer: ReturnType<typeof setTimeout> | null = null
   let searchTimer: ReturnType<typeof setTimeout> | null = null
+  let thumbSaveTimer: ReturnType<typeof setTimeout> | null = null
   /** クエリに使う検索語。入力欄の値 (state.search) から遅れて追いつく */
   let appliedSearch = ''
   // 非同期の応答が追い越されたときに、古い結果で上書きしないための世代番号
@@ -227,7 +248,7 @@ export const useStore = create<State & Actions>((set, get) => {
       ids: [],
       tags: [],
       viewerIndex: null,
-      ...NO_SELECTION,
+      ...RESET_VIEW,
       lastViewedIndex: null,
       ...(root ? {} : { tree: null })
     })
@@ -270,6 +291,7 @@ export const useStore = create<State & Actions>((set, get) => {
     selection: [],
     selectionAnchor: null,
     tagsVersion: 0,
+    similarTo: null,
 
     async init() {
       if (initStarted) return
@@ -326,6 +348,10 @@ export const useStore = create<State & Actions>((set, get) => {
       })
       window.api.onImageTagged(() => scheduleRefresh(TAGGED_DEBOUNCE))
       window.api.onFullScreen((fullScreen) => set({ fullScreen }))
+      // 単画像ビューではサムネイルが見えないので何もしない
+      window.api.onThumbZoom((delta) => {
+        if (get().viewerIndex === null) get().zoomThumbnails(delta)
+      })
 
       void get().refreshLibraries()
       if (root) {
@@ -364,19 +390,19 @@ export const useStore = create<State & Actions>((set, get) => {
     },
 
     setDir(dir) {
-      set({ dir, viewerIndex: null, ...NO_SELECTION })
+      set({ dir, viewerIndex: null, ...RESET_VIEW })
       void get().refresh()
       void get().refreshTags()
     },
 
     setRecursive(recursive) {
-      set({ recursive, viewerIndex: null, ...NO_SELECTION })
+      set({ recursive, viewerIndex: null, ...RESET_VIEW })
       void get().refresh()
       void get().refreshTags()
     },
 
     setSort(sortKey, sortOrder) {
-      set({ sortKey, sortOrder })
+      set({ sortKey, sortOrder, similarTo: null })
       void window.api.setSettings({ sortKey, sortOrder })
       void get().refresh()
     },
@@ -389,7 +415,7 @@ export const useStore = create<State & Actions>((set, get) => {
           : [...includeTags, tagId],
         excludeTags: excludeTags.filter((id) => id !== tagId),
         viewerIndex: null,
-        ...NO_SELECTION
+        ...RESET_VIEW
       })
       void get().refresh()
       void get().refreshTags()
@@ -403,20 +429,20 @@ export const useStore = create<State & Actions>((set, get) => {
           : [...excludeTags, tagId],
         includeTags: includeTags.filter((id) => id !== tagId),
         viewerIndex: null,
-        ...NO_SELECTION
+        ...RESET_VIEW
       })
       void get().refresh()
       void get().refreshTags()
     },
 
     clearTags() {
-      set({ includeTags: [], excludeTags: [], viewerIndex: null, ...NO_SELECTION })
+      set({ includeTags: [], excludeTags: [], viewerIndex: null, ...RESET_VIEW })
       void get().refresh()
       void get().refreshTags()
     },
 
     setTagMode(tagMode) {
-      set({ tagMode, viewerIndex: null, ...NO_SELECTION })
+      set({ tagMode, viewerIndex: null, ...RESET_VIEW })
       void get().refresh()
       void get().refreshTags()
     },
@@ -433,13 +459,13 @@ export const useStore = create<State & Actions>((set, get) => {
         searchTimer = null
         if (appliedSearch === search) return
         appliedSearch = search
-        set({ viewerIndex: null, ...NO_SELECTION })
+        set({ viewerIndex: null, ...RESET_VIEW })
         void get().refresh()
       }, SEARCH_DEBOUNCE)
     },
 
     setFavoritesOnly(favoritesOnly) {
-      set({ favoritesOnly, viewerIndex: null, ...NO_SELECTION })
+      set({ favoritesOnly, viewerIndex: null, ...RESET_VIEW })
       void get().refresh()
     },
 
@@ -491,7 +517,7 @@ export const useStore = create<State & Actions>((set, get) => {
         sortKey: data.sortKey,
         sortOrder: data.sortOrder,
         viewerIndex: null,
-        ...NO_SELECTION
+        ...RESET_VIEW
       })
       void window.api.setSettings({ sortKey: data.sortKey, sortOrder: data.sortOrder })
       void get().refresh()
@@ -510,7 +536,11 @@ export const useStore = create<State & Actions>((set, get) => {
       if (!get().root) return
       const token = ++queryToken
       set({ loading: true })
-      const ids = await window.api.queryImages(currentQuery())
+      const { similarTo } = get()
+      const ids =
+        similarTo !== null
+          ? await window.api.findSimilar(similarTo)
+          : await window.api.queryImages(currentQuery())
       if (token !== queryToken) return // 新しいクエリに追い越された
 
       // 表示中の画像が結果から消えた場合は近い位置へ寄せる
@@ -698,6 +728,33 @@ export const useStore = create<State & Actions>((set, get) => {
       set((state) => ({ tagsVersion: state.tagsVersion + 1 }))
       void get().refreshTags()
       if (get().includeTags.length > 0 || get().excludeTags.length > 0) void get().refresh()
+    },
+
+    showSimilar(id) {
+      set({ similarTo: id, viewerIndex: null, lastViewedIndex: null, ...NO_SELECTION })
+      void get().refresh()
+    },
+
+    exitSimilar() {
+      if (get().similarTo === null) return
+      set({ similarTo: null, viewerIndex: null, lastViewedIndex: null, ...NO_SELECTION })
+      void get().refresh()
+    },
+
+    zoomThumbnails(delta) {
+      const { settings } = get()
+      if (!settings) return
+      const next =
+        delta === 0
+          ? THUMBNAIL_SIZE_DEFAULT
+          : clampThumbnailSize(settings.thumbnailSize + delta * THUMBNAIL_SIZE_STEP)
+      if (next === settings.thumbnailSize) return
+      set({ settings: { ...settings, thumbnailSize: next } })
+      if (thumbSaveTimer) clearTimeout(thumbSaveTimer)
+      thumbSaveTimer = setTimeout(() => {
+        thumbSaveTimer = null
+        void window.api.setSettings({ thumbnailSize: get().settings?.thumbnailSize ?? next })
+      }, THUMB_SAVE_DEBOUNCE)
     },
 
     async setFullScreen(fullScreen) {

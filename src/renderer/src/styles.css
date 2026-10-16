@@ -562,6 +562,30 @@ select,
 
 /* --------------------------------------------------------- selection bar */
 
+.similar-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px 6px 14px;
+  border-bottom: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  background: var(--bg-elevated);
+}
+
+.similar-banner__name {
+  font-weight: 600;
+}
+
+.similar-banner__count {
+  margin-left: 8px;
+  color: var(--text-dim);
+}
+
+.similar-banner__hint {
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
 .selection-bar {
   border-bottom: 1px solid var(--border);
   background: var(--bg-elevated);

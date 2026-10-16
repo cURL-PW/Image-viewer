@@ -20,12 +20,16 @@ import {
   type SavedFilter,
   type SavedFilterData,
   type TrashResult,
-  normalizeRotation
+  normalizeRotation,
+  thumbnailGenerationSize
 } from '@shared/types'
 import { closeRoot, cloudModeKey, openRoot, type AppContext } from './context'
 import { openImage } from './images'
 import { excludeTags } from '@shared/tag-filter'
 import { sanitizeFilterData } from '@shared/saved-filter'
+
+/** 似た画像として出す最大枚数 */
+const SIMILAR_LIMIT = 200
 
 export interface ImageInfoResult {
   image: ImageRecord | null
@@ -236,6 +240,13 @@ export function registerIpcHandlers(ctx: AppContext): void {
     return ctx.db.tagsForImages(rootId, ids)
   })
 
+  ipcMain.handle(IPC.findSimilar, (_event, id: number): number[] => {
+    const rootId = ctx.library.currentRootId
+    if (rootId === null || !Number.isInteger(id)) return []
+    const similar = ctx.db.findSimilar(rootId, id, SIMILAR_LIMIT)
+    return [id, ...similar.map((row) => row.id)]
+  })
+
   ipcMain.handle(IPC.suggestTags, (_event, text: string): string[] =>
     typeof text === 'string' ? ctx.db.suggestTags(text, 20) : []
   )
@@ -399,7 +410,7 @@ export function registerIpcHandlers(ctx: AppContext): void {
     const { settings, changed } = ctx.settings.update(patch)
 
     if (changed.includes('thumbnailSize')) {
-      ctx.thumbs.setSize(settings.thumbnailSize)
+      ctx.thumbs.setSize(thumbnailGenerationSize(settings.thumbnailSize))
     }
     if (changed.includes('alwaysReadCloudFiles')) {
       ctx.guard.setAlwaysRead(settings.alwaysReadCloudFiles)

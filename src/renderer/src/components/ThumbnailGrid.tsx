@@ -1,10 +1,12 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { thumbUrl } from '@shared/types'
+import { thumbUrl, thumbnailGenerationSize } from '@shared/types'
 import { useStore } from '../store'
 
 const GAP = 10
 const PADDING = 14
 const CAPTION_HEIGHT = 24
+/** Ctrl + ホイールの 1 段分の移動量 (px)。トラックパッドの細かい移動は溜めてから 1 段にする */
+const WHEEL_STEP = 100
 /** 画面外にも先読みしておく行数 */
 const OVERSCAN_ROWS = 2
 
@@ -12,7 +14,7 @@ const OVERSCAN_ROWS = 2
  * 単画像ビューを開くとグリッドは外される (App が出し分けている) ので、
  * スクロール位置はコンポーネントの外に残しておき、戻ったときに復元する。
  */
-let savedScroll: { dir: string; top: number } | null = null
+let savedScroll: { key: string; top: number } | null = null
 
 /**
  * 仮想スクロールのサムネイルグリッド。
@@ -26,6 +28,9 @@ export default function ThumbnailGrid(): React.JSX.Element {
   const openContextMenu = useStore((state) => state.openContextMenu)
   const loading = useStore((state) => state.loading)
   const dir = useStore((state) => state.dir)
+  const similarTo = useStore((state) => state.similarTo)
+  // スクロール位置を覚えておく単位。似た画像の一覧はフォルダとは別に扱う
+  const viewKey = similarTo !== null ? `similar:${similarTo}` : `dir:${dir}`
   const thumbnailSize = useStore((state) => state.settings?.thumbnailSize ?? 256)
   const thumbEpoch = useStore((state) => state.thumbEpoch)
   const setFavorite = useStore((state) => state.setFavorite)
@@ -37,6 +42,10 @@ export default function ThumbnailGrid(): React.JSX.Element {
   const [scrollTop, setScrollTop] = useState(0)
   /** 前回のスクロール位置の復元が済んだか (マウント直後に一度だけ行う) */
   const restoredRef = useRef(false)
+  /** 大きさを変える前の並び。真ん中の画像を見失わないよう、変えた後のスクロール位置を決めるのに使う */
+  const layoutRef = useRef<{ size: number; columns: number; rowHeight: number } | null>(null)
+  const wheelRef = useRef(0)
+  const zoomThumbnails = useStore((state) => state.zoomThumbnails)
 
   const cellHeight = thumbnailSize + CAPTION_HEIGHT
   const rowHeight = cellHeight + GAP
@@ -55,14 +64,14 @@ export default function ThumbnailGrid(): React.JSX.Element {
     return () => observer.disconnect()
   }, [])
 
-  // フォルダを切り替えたら先頭に戻す。
-  // 単画像ビューから戻ってきただけ (同じフォルダ) のときは下の復元に任せる。
+  // フォルダを切り替えたり似た画像を開いたりしたら先頭に戻す。
+  // 単画像ビューから戻ってきただけ (同じ一覧) のときは下の復元に任せる。
   useEffect(() => {
-    if (savedScroll?.dir === dir) return
+    if (savedScroll?.key === viewKey) return
     savedScroll = null
     containerRef.current?.scrollTo({ top: 0 })
     setScrollTop(0)
-  }, [dir])
+  }, [viewKey])
 
   const columns = Math.max(
     1,
@@ -86,7 +95,7 @@ export default function ThumbnailGrid(): React.JSX.Element {
     const element = containerRef.current
     if (!element || restoredRef.current || viewport.width === 0) return
     restoredRef.current = true
-    if (savedScroll?.dir !== dir) return
+    if (savedScroll?.key !== viewKey) return
 
     let top = savedScroll.top
     // ページ送りで別の画像まで進んでいたら、その画像が見える位置までずらす
@@ -99,7 +108,47 @@ export default function ThumbnailGrid(): React.JSX.Element {
     }
     element.scrollTop = top
     setScrollTop(element.scrollTop)
-  }, [viewport, dir, ids.length, columns, rowHeight, cellHeight])
+  }, [viewport, viewKey, ids.length, columns, rowHeight, cellHeight])
+
+  // サムネイルの大きさを変えたら、画面の真ん中にあった画像が真ん中に来るようにずらす
+  useLayoutEffect(() => {
+    const element = containerRef.current
+    const previous = layoutRef.current
+    layoutRef.current = { size: thumbnailSize, columns, rowHeight }
+    if (!element || !previous || previous.size === thumbnailSize || viewport.height === 0) return
+    if (ids.length === 0) return
+    const centerY = element.scrollTop + viewport.height / 2 - PADDING
+    const row = Math.max(0, Math.floor(centerY / previous.rowHeight))
+    const centerIndex = Math.min(
+      ids.length - 1,
+      row * previous.columns + Math.floor(previous.columns / 2)
+    )
+    const top =
+      PADDING + Math.floor(centerIndex / columns) * rowHeight + cellHeight / 2 - viewport.height / 2
+    element.scrollTop = Math.max(0, top)
+    setScrollTop(element.scrollTop)
+    // 大きさを変えたときだけ動かす (ids や画面の大きさが変わっただけでは動かさない)
+  }, [thumbnailSize, columns, rowHeight])
+
+  // Ctrl + ホイール (mac は Cmd も) でサムネイルの大きさを変える。
+  // React の onWheel は passive なので、既定の動き (スクロール・画面ズーム) を止めるためにネイティブで張る
+  useEffect(() => {
+    const element = containerRef.current
+    if (!element) return
+    const onWheel = (event: WheelEvent): void => {
+      if (!event.ctrlKey && !event.metaKey) return
+      event.preventDefault()
+      const pixels = event.deltaMode === 1 ? event.deltaY * 16 : event.deltaY
+      wheelRef.current += pixels
+      while (Math.abs(wheelRef.current) >= WHEEL_STEP) {
+        const direction = wheelRef.current < 0 ? 1 : -1
+        wheelRef.current += direction * WHEEL_STEP
+        zoomThumbnails(direction)
+      }
+    }
+    element.addEventListener('wheel', onWheel, { passive: false })
+    return () => element.removeEventListener('wheel', onWheel)
+  }, [zoomThumbnails])
 
   const visibleIds = useMemo(
     () => ids.slice(startRow * columns, endRow * columns),
@@ -123,7 +172,7 @@ export default function ThumbnailGrid(): React.JSX.Element {
       onScroll={(event) => {
         const top = event.currentTarget.scrollTop
         setScrollTop(top)
-        savedScroll = { dir, top }
+        savedScroll = { key: viewKey, top }
       }}
     >
       {ids.length === 0 ? (
@@ -185,7 +234,7 @@ export default function ThumbnailGrid(): React.JSX.Element {
                   {image && (
                     <img
                       className="cell__image"
-                      src={thumbUrl(image, thumbEpoch)}
+                      src={thumbUrl(image, thumbEpoch, thumbnailGenerationSize(thumbnailSize))}
                       alt={image.fileName}
                       // 枠が正方形なので、収めた後に回してもはみ出さない
                       style={

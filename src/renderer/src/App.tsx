@@ -6,6 +6,7 @@ import ImageViewer from './components/ImageViewer'
 import LibraryList from './components/LibraryList'
 import SavedFilters from './components/SavedFilters'
 import SelectionBar from './components/SelectionBar'
+import SimilarBanner from './components/SimilarBanner'
 import { confirmAndTrash } from './lib/trash'
 import Notice from './components/Notice'
 import SettingsDialog from './components/SettingsDialog'
@@ -59,6 +60,10 @@ export default function App(): React.JSX.Element {
         } else if (event.key === 'Escape' && state.selection.length > 0) {
           event.preventDefault()
           state.clearSelection()
+        } else if (event.key === 'Escape' && state.similarTo !== null) {
+          // 選択が無ければ、似た画像の表示をやめる
+          event.preventDefault()
+          state.exitSimilar()
         } else if (event.key === 'Delete' && state.selection.length > 0) {
           event.preventDefault()
           confirmAndTrash(state.selection)
@@ -110,6 +115,15 @@ export default function App(): React.JSX.Element {
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [])
 
+  // Ctrl + ホイールの画面全体の拡大縮小は使わない (一覧ではサムネイルの大きさを変える)
+  useEffect(() => {
+    const onWheel = (event: WheelEvent): void => {
+      if (event.ctrlKey || event.metaKey) event.preventDefault()
+    }
+    window.addEventListener('wheel', onWheel, { passive: false })
+    return () => window.removeEventListener('wheel', onWheel)
+  }, [])
+
   return (
     <div className={`app${immersive ? ' app--immersive' : ''}`}>
       <Toolbar />
@@ -136,6 +150,7 @@ export default function App(): React.JSX.Element {
             </div>
           ) : viewerIndex === null ? (
             <>
+              <SimilarBanner />
               <SelectionBar />
               <ThumbnailGrid />
             </>

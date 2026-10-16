@@ -93,6 +93,7 @@ test('一覧のサムネイルを右クリックするとメニューが出る',
         ? 'Finder で表示'
         : 'フォルダで表示',
     'お気に入りに追加',
+    '似た画像を探す',
     '画像をコピー',
     'パスをコピー',
     'ファイル名をコピー',
@@ -100,8 +101,9 @@ test('一覧のサムネイルを右クリックするとメニューが出る',
     'タグをコピー (除外あり)',
     'ごみ箱へ移動'
   ])
-  // タグ付け済みなので「タグをコピー」も押せる
+  // タグ付け済みなので「タグをコピー」「似た画像を探す」も押せる
   await expect(menuItem('タグをコピー')).toBeEnabled()
+  await expect(menuItem('似た画像を探す')).toBeEnabled()
   // 除外ルールを登録するまでは押せない
   await expect(menuItem('タグをコピー (除外あり)')).toBeDisabled()
   // 右クリックで単画像ビューへ移ってはいけない
@@ -220,8 +222,8 @@ test('メニューの外をクリックすると閉じ、画面端でははみ�
 test('キーボードで項目を選んで実行できる', async () => {
   await firstCell().click({ button: 'right' })
   await expect(menu()).toBeVisible()
-  // 開く → 既定のアプリで開く → フォルダで表示 → お気に入りに追加 → 画像をコピー → パスをコピー
-  for (let i = 0; i < 6; i++) await window.keyboard.press('ArrowDown')
+  // 開く → 既定のアプリで開く → フォルダで表示 → お気に入りに追加 → 似た画像を探す → 画像をコピー → パスをコピー
+  for (let i = 0; i < 7; i++) await window.keyboard.press('ArrowDown')
   await expect(window.locator('.context-menu__item--active')).toHaveText('パスをコピー')
   await window.keyboard.press('Enter')
   await expect(menu()).toBeHidden()

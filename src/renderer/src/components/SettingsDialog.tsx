@@ -1,4 +1,4 @@
-import { AVAILABLE_MODELS } from '@shared/types'
+import { AVAILABLE_MODELS, THUMBNAIL_SIZE_MAX, THUMBNAIL_SIZE_MIN } from '@shared/types'
 import { useStore } from '../store'
 import CloudDiagnosticsPanel from './CloudDiagnostics'
 import ExcludeTagsField from './ExcludeTagsField'
@@ -128,14 +128,15 @@ export default function SettingsDialog(): React.JSX.Element | null {
             <input
               id="thumb"
               type="range"
-              min={96}
-              max={512}
+              min={THUMBNAIL_SIZE_MIN}
+              max={THUMBNAIL_SIZE_MAX}
               step={16}
               value={settings.thumbnailSize}
               onChange={(event) =>
                 void updateSettings({ thumbnailSize: Number(event.target.value) })
               }
             />
+            <p className="field__hint">一覧で Ctrl + ホイール、Ctrl + − / ＋ / 0 でも変えられます。</p>
           </section>
 
           <section className="field">
