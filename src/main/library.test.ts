@@ -127,3 +127,57 @@ describe('walkImages の stat 門番', () => {
     expect(files.filter((file) => file.size === 0)).toHaveLength(2)
   })
 })
+
+describe('walkImages の差分走査', () => {
+  /**
+   * 起動のたびに登録済みの 9 万枚を stat し直すと、Windows では全ファイルを開くことになる。
+   * 登録済みのファイルは stat せず、新しく現れたファイルだけを stat することを確認する。
+   */
+  async function fixture(): Promise<string> {
+    const os = await import('node:os')
+    const fsp = await import('node:fs/promises')
+    const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'walk-known-'))
+    await fsp.mkdir(path.join(dir, 'sub'), { recursive: true })
+    for (const name of ['a.png', 'b.png', 'sub/c.png']) {
+      await fsp.writeFile(path.join(dir, ...name.split('/')), Buffer.alloc(16, 1))
+    }
+    return dir
+  }
+
+  it('登録済みのファイルは stat せず、新しいファイルだけ stat する', async () => {
+    const root = await fixture()
+    let statCalls = 0
+    const files = []
+    const known = new Map([
+      ['a.png', { mtime: 1000 }],
+      ['sub/c.png', { mtime: 1000 }]
+    ])
+    for await (const batch of walkImages(root, {
+      known,
+      gate: { allow: () => true, record: () => statCalls++ }
+    })) {
+      files.push(...batch)
+    }
+    files.sort((a, b) => a.relPath.localeCompare(b.relPath))
+
+    expect(files.map((file) => file.relPath)).toEqual(['a.png', 'b.png', 'sub/c.png'])
+    expect(statCalls).toBe(1)
+    expect(files[1].size).toBe(16)
+    // 登録済みは前回の値を壊さないよう「寸法不明」の印を付けて返す
+    expect(files[0].statSkipped).toBe(true)
+    expect(files[2].statSkipped).toBe(true)
+  })
+
+  it('mtime が 0 のまま登録されているファイルは、値を埋めるために stat する', async () => {
+    const root = await fixture()
+    let statCalls = 0
+    const known = new Map([['a.png', { mtime: 0 }]])
+    for await (const batch of walkImages(root, {
+      known,
+      gate: { allow: () => true, record: () => statCalls++ }
+    })) {
+      void batch
+    }
+    expect(statCalls).toBe(3)
+  })
+})

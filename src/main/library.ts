@@ -63,6 +63,12 @@ export interface StatGate {
 export interface WalkOptions {
   batchSize?: number
   gate?: StatGate
+  /**
+   * 前回の走査で登録済みのパス。ここに在るファイルは stat せず、前回の値のまま扱う。
+   * 起動のたびに 9 万枚を開き直さないための差分走査に使う。
+   * mtime が 0 (stat を止めていた間に登録したもの) は、値を埋めるために stat する
+   */
+  known?: ReadonlyMap<string, { mtime: number }>
 }
 
 /**
@@ -78,6 +84,7 @@ export async function* walkImages(
 ): AsyncGenerator<WalkedFile[]> {
   const batchSize = options.batchSize ?? WALK_BATCH
   const gate = options.gate
+  const known = options.known
   const stack: string[] = [rootPath]
   let batch: WalkedFile[] = []
 
@@ -112,9 +119,19 @@ export async function* walkImages(
       const relPath = toRelPath(rootPath, fullPath)
       const { dirPath, fileName } = splitRelPath(relPath)
 
-      // readdir はファイルを開かないので安全だが、stat は Windows で実体を取りに行く。
-      // 止められている間は寸法不明のまま登録し、必要になった時点で埋める。
-      if (gate && !gate.allow()) {
+      // 登録済みのファイルは名前が在ることだけ確かめれば足りる。
+      // 中身の書き換えは起動中なら監視が拾うので、起動時に全件 stat し直すことはしない
+      if ((known?.get(relPath)?.mtime ?? 0) > 0) {
+        debugLog().countEvent(WALK_LOG_INTERVAL, {
+          kind: 'walk-stat',
+          decision: 'skipped',
+          target: relPath,
+          note: '登録済み'
+        })
+        batch.push({ fullPath, relPath, dirPath, fileName, mtime: 0, size: 0, statSkipped: true })
+      } else if (gate && !gate.allow()) {
+        // readdir はファイルを開かないので安全だが、stat は Windows で実体を取りに行く。
+        // 止められている間は寸法不明のまま登録し、必要になった時点で埋める。
         // 1 件ずつ出すと 9 万行になるのでまとめる
         debugLog().countEvent(WALK_LOG_INTERVAL, {
           kind: 'walk-stat',
@@ -272,6 +289,9 @@ export class Library extends EventEmitter<LibraryEvents> {
     log.log({ kind: 'walk-start', target: rootPath })
 
     const known = this.db.allRelPaths(rootId)
+    // 登録済みのファイルは stat しない (差分走査)。新しく現れたファイルと、
+    // 消えたファイルだけを拾う。初回 (DB が空) はこれまでどおり全件 stat する
+    const walkKnown = known.size > 0 ? known : undefined
     const seen = new Set<string>()
     let found = 0
     // 走査中の通知はまとめる。1 バッチごとに投げると renderer が毎回
@@ -298,7 +318,7 @@ export class Library extends EventEmitter<LibraryEvents> {
     }
 
     try {
-      for await (const batch of walkImages(rootPath, { gate: this.gate })) {
+      for await (const batch of walkImages(rootPath, { gate: this.gate, known: walkKnown })) {
         if (generation !== this.generation) return // ルートが切り替わった
         for (const file of batch) seen.add(file.relPath)
         const { added, updated } = this.db.upsertMany(rootId, batch, known)
