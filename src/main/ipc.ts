@@ -6,6 +6,7 @@ import {
   IPC,
   type AppSettings,
   type BrowserImportInfo,
+  type ImportTarget,
   type DebugLogInfo,
   type FolderNode,
   type ImageQuery,
@@ -29,6 +30,8 @@ import {
   applyImportServerSettings,
   closeRoot,
   cloudModeKey,
+  importTargetKey,
+  loadImportTarget,
   openRoot,
   type AppContext
 } from './context'
@@ -137,6 +140,7 @@ export function registerIpcHandlers(ctx: AppContext): void {
       ctx.db.removeRoot(id)
     }
     ctx.db.setSetting(cloudModeKey(rootPath), '')
+    ctx.db.setSetting(importTargetKey(rootPath), '')
     return currentRoot(ctx)
   })
 
@@ -462,13 +466,28 @@ export function registerIpcHandlers(ctx: AppContext): void {
     return settings
   })
 
-  ipcMain.handle(IPC.getBrowserImport, (): BrowserImportInfo => ({
-    status: ctx.importServer.currentStatus,
-    token: loadImportToken(ctx.db)
-  }))
+  const browserImportInfo = (token: string): BrowserImportInfo => {
+    const rootPath = ctx.library.currentRootPath
+    return {
+      status: ctx.importServer.currentStatus,
+      token,
+      target: rootPath === null ? null : loadImportTarget(ctx.db, rootPath)
+    }
+  }
 
-  ipcMain.handle(IPC.regenerateImportToken, (): BrowserImportInfo => ({
-    status: ctx.importServer.currentStatus,
-    token: regenerateImportToken(ctx.db)
-  }))
+  ipcMain.handle(IPC.getBrowserImport, (): BrowserImportInfo =>
+    browserImportInfo(loadImportToken(ctx.db))
+  )
+
+  ipcMain.handle(IPC.regenerateImportToken, (): BrowserImportInfo =>
+    browserImportInfo(regenerateImportToken(ctx.db))
+  )
+
+  ipcMain.handle(IPC.setImportTarget, (_event, target: ImportTarget): BrowserImportInfo => {
+    const rootPath = ctx.library.currentRootPath
+    if (rootPath !== null && (target === 'root' || target === 'imported')) {
+      ctx.db.setSetting(importTargetKey(rootPath), target)
+    }
+    return browserImportInfo(loadImportToken(ctx.db))
+  })
 }

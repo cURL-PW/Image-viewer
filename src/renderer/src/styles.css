@@ -1213,6 +1213,12 @@ select,
   width: 7em;
 }
 
+.browser-import .browser-import__target {
+  flex: 1;
+  width: auto;
+  min-width: 0;
+}
+
 .browser-import__token {
   flex: 1;
   min-width: 0;

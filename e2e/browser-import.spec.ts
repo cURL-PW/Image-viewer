@@ -244,6 +244,33 @@ test('Twitter (X) の画像は原寸で取り込み、投稿者と投稿 ID を�
   await window.screenshot({ path: `${SHOTS}/browser-import-source.png` })
 })
 
+test('保存先を「ライブラリ直下」にすると、フォルダを作らず直下に保存する', async () => {
+  await window.keyboard.press('Escape')
+  await openSettings()
+  const target = window.locator('#browser-import-target')
+  await expect(target).toHaveValue('imported')
+  await target.selectOption('root')
+  await expect(target).toHaveValue('root')
+  const section = window.locator('.browser-import')
+  await section.scrollIntoViewIfNeeded()
+  await section.screenshot({ path: `${SHOTS}/browser-import-target.png` })
+  await closeSettings()
+
+  const page = await browser.newPage()
+  await page.goto('http://gallery.test/gallery')
+  await page.locator('#plain').click({ modifiers: ['Alt', 'Shift'] })
+  await expect
+    .poll(async () => (await fs.readdir(fixture.root)).includes('plain.png'))
+    .toBe(true)
+  expect(await importedFiles()).toEqual(['GaBc123.png', 'full.png'])
+  await page.close()
+
+  // 保存先はライブラリごとに覚える (再び開いても直下のまま)
+  await openSettings()
+  await expect(target).toHaveValue('root')
+  await closeSettings()
+})
+
 test('画像でないものは保存しない', async () => {
   const response = await fetch(`http://127.0.0.1:${IMPORT_PORT}/v1/import`, {
     method: 'POST',

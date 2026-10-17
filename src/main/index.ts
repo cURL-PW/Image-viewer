@@ -6,6 +6,7 @@ import {
   applyImportServerSettings,
   broadcast,
   cloudModeKey,
+  loadImportTarget,
   openRoot,
   type AppContext
 } from './context'
@@ -137,7 +138,7 @@ function createContext(): AppContext {
 
   // 合言葉は作り直しに追従するよう、毎回 DB から読む
   loadImportToken(db)
-  const importer = new BrowserImporter(db, library)
+  const importer = new BrowserImporter(db, library, (rootPath) => loadImportTarget(db, rootPath))
   const importServer = new ImportServer({
     token: () => loadImportToken(db),
     hasLibrary: () => library.currentRootId !== null,

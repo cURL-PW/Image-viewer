@@ -1,6 +1,6 @@
 # Image Viewer に取り込む (ブラウザ拡張)
 
-ページ上の画像を、PC で起動中の Image Viewer のライブラリ (`Imported` フォルダ) に取り込む拡張です。
+ページ上の画像を、PC で起動中の Image Viewer のライブラリ (既定は `Imported` フォルダ。アプリの設定でライブラリ直下にもできます) に取り込む拡張です。
 Firefox と Chrome / Edge で同じコードが動きます。
 
 ## 使い方
