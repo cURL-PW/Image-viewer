@@ -1,0 +1,46 @@
+{
+  "manifest_version": 3,
+  "name": "Image Viewer に取り込む",
+  "short_name": "Image Viewer",
+  "version": "0.1.0",
+  "description": "ページ上の画像を、PC で起動中の Image Viewer のライブラリへ取り込みます。",
+  "icons": {
+    "48": "icons/icon-48.png",
+    "96": "icons/icon-96.png",
+    "128": "icons/icon-128.png"
+  },
+  "background": {
+    "service_worker": "background.js",
+    "scripts": ["lib.js", "background.js"]
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["lib.js", "content.js"],
+      "all_frames": true,
+      "run_at": "document_idle"
+    }
+  ],
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": true
+  },
+  "action": {
+    "default_title": "Image Viewer に取り込む (設定)",
+    "default_icon": {
+      "48": "icons/icon-48.png",
+      "96": "icons/icon-96.png"
+    }
+  },
+  "permissions": ["contextMenus", "storage", "notifications", "declarativeNetRequestWithHostAccess"],
+  "host_permissions": ["<all_urls>"],
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "image-viewer-import@curl-pw.github.io",
+      "strict_min_version": "128.0",
+      "data_collection_permissions": {
+        "required": ["none"]
+      }
+    }
+  }
+}

@@ -34,7 +34,20 @@ export interface TagResult {
   confidence: number
 }
 
-const SCHEMA_VERSION = 4
+/** ブラウザ拡張から取り込んだ画像の取り込み元 */
+export interface ImageSourceRow {
+  relPath: string
+  sha256: string
+  pageUrl: string | null
+  imageUrl: string | null
+  /** 投稿者や投稿 ID を読み取れたサイト ('twitter' など) */
+  site: string | null
+  author: string | null
+  postId: string | null
+  importedAt: number
+}
+
+const SCHEMA_VERSION = 5
 
 /**
  * ファイル名中の数字列をゼロ埋めして自然順ソート用のキーを作る。
@@ -116,6 +129,25 @@ export class LibraryDb {
           mode     INTEGER NOT NULL,  -- 1 = 足した, -1 = 外した
           PRIMARY KEY (image_id, tag_id)
         );
+      `)
+    }
+    // v5: ブラウザ拡張から取り込んだ画像の取り込み元。
+    // 取り込んだ時点では画像の行がまだ無いこともあるので、画像 ID ではなくパスで持つ
+    if (version < 5) {
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS image_sources (
+          root_id     INTEGER NOT NULL REFERENCES roots(id) ON DELETE CASCADE,
+          rel_path    TEXT NOT NULL,
+          sha256      TEXT NOT NULL,
+          page_url    TEXT,
+          image_url   TEXT,
+          site        TEXT,
+          author      TEXT,
+          post_id     TEXT,
+          imported_at INTEGER NOT NULL,
+          PRIMARY KEY (root_id, rel_path)
+        );
+        CREATE INDEX IF NOT EXISTS idx_image_sources_hash ON image_sources(root_id, sha256);
       `)
     }
     this.db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`)
@@ -766,6 +798,47 @@ export class LibraryDb {
 
   // ------------------------------------------------------------- settings
 
+  // ---------------------------------------------------------------- 取り込み元
+
+  addImageSource(rootId: number, source: ImageSourceRow): void {
+    this.stmt(
+      `INSERT OR REPLACE INTO image_sources
+         (root_id, rel_path, sha256, page_url, image_url, site, author, post_id, imported_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      rootId,
+      source.relPath,
+      source.sha256,
+      source.pageUrl,
+      source.imageUrl,
+      source.site,
+      source.author,
+      source.postId,
+      source.importedAt
+    )
+  }
+
+  /** 同じ中身を前に取り込んだ記録 (ファイルが今もあるかは呼び出し側で確かめる) */
+  findImageSourcesByHash(rootId: number, sha256: string): ImageSourceRow[] {
+    const rows = this.stmt(
+      `SELECT rel_path, sha256, page_url, image_url, site, author, post_id, imported_at
+         FROM image_sources WHERE root_id = ? AND sha256 = ?`
+    ).all(rootId, sha256) as Record<string, SQLInputValue>[]
+    return rows.map(toSourceRow)
+  }
+
+  getImageSource(rootId: number, relPath: string): ImageSourceRow | null {
+    const row = this.stmt(
+      `SELECT rel_path, sha256, page_url, image_url, site, author, post_id, imported_at
+         FROM image_sources WHERE root_id = ? AND rel_path = ?`
+    ).get(rootId, relPath) as Record<string, SQLInputValue> | undefined
+    return row ? toSourceRow(row) : null
+  }
+
+  removeImageSource(rootId: number, relPath: string): void {
+    this.stmt('DELETE FROM image_sources WHERE root_id = ? AND rel_path = ?').run(rootId, relPath)
+  }
+
   getSetting(key: string): string | null {
     const row = this.db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as
       | { value: string }
@@ -905,5 +978,19 @@ export function buildOrder(query: ImageQuery): string {
     case 'path':
     default:
       return `sort_key ${direction}`
+  }
+}
+
+function toSourceRow(row: Record<string, SQLInputValue>): ImageSourceRow {
+  const text = (value: SQLInputValue): string | null => (typeof value === 'string' ? value : null)
+  return {
+    relPath: String(row.rel_path),
+    sha256: String(row.sha256),
+    pageUrl: text(row.page_url),
+    imageUrl: text(row.image_url),
+    site: text(row.site),
+    author: text(row.author),
+    postId: text(row.post_id),
+    importedAt: Number(row.imported_at)
   }
 }

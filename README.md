@@ -179,6 +179,13 @@ IMAGE_VIEWER_ROOT=/path/to/images npm run dev
 | 一覧で Ctrl + ホイール / Ctrl + − ＋ 0 | サムネイルの大きさを変える (0 で既定) |
 | 画像を右クリック | メニュー (開く / 既定のアプリで開く / エクスプローラーで表示 / 似た画像を探す / 画像・パス・ファイル名・タグをコピー / 除外タグを除いてタグをコピー) |
 
+### ブラウザから取り込む
+
+ブラウザ拡張を入れると、ページ上の画像を右クリックメニュー「Image Viewer に取り込む」か `Alt+Shift+クリック` で、開いているライブラリの `Imported` フォルダに取り込めます。詳しい入れ方は [extension/README.md](extension/README.md) を見てください。
+
+1. Image Viewer の設定で「ブラウザからの取り込みを受け付ける」をオンにする
+2. 表示されたポート番号と合言葉を、拡張の設定画面に貼り付けて「接続を確かめる」
+
 ### タグ絞り込み
 
 サイドバーのタグ一覧はフォルダ選択の範囲で集計されます。タグ名をクリックすると「そのタグを含む」条件、行右端の `−` で「そのタグを除外する」条件になります。複数タグは AND / OR を切り替えられ、フォルダ選択とも組み合わさります。
@@ -210,6 +217,8 @@ python3 e2e/fixtures/make-heic.py
 ```
 
 ヘッドレス環境では `xvfb-run -a npm run e2e` のように実行してください。
+
+ブラウザ拡張の E2E (`e2e/browser-import.spec.ts`) は Chromium に `extension/` を読み込んで動かします。初回は `npx playwright install chromium` で Chromium を入れてください (別の場所の Chromium を使う場合は `PLAYWRIGHT_CHROMIUM_PATH` で指定できます)。拡張の配布用 zip は `npm run extension` で `release/extension/` に作られます。
 
 ### 構成
 

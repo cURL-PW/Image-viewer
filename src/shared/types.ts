@@ -251,6 +251,58 @@ export interface AppSettings {
    * (照合は shared/tag-filter.ts)
    */
   copyExcludeTags: string[]
+  /** ブラウザ拡張からの画像の取り込みを受け付ける (127.0.0.1 の受け口を開く) */
+  browserImport: boolean
+  /** 受け口のポート番号 */
+  browserImportPort: number
+}
+
+/** 受け口の既定のポート */
+export const BROWSER_IMPORT_DEFAULT_PORT = 47811
+
+/** ブラウザ拡張の受け口の状態 (設定画面に出す) */
+export interface ImportServerStatus {
+  listening: boolean
+  port: number | null
+  /** 開けなかった理由。'in-use' はポートが他のアプリに使われている */
+  error: 'in-use' | string | null
+}
+
+/**
+ * ブラウザ拡張から届いた画像を取り込んだ結果。拡張への応答と、renderer への通知に使う。
+ * - imported: Imported フォルダへ保存した
+ * - duplicate: 同じ中身を前に取り込んでいたので保存しなかった
+ * - no-library: ライブラリを開いていない
+ * - unsupported: 画像として読めない (対応していない形式)
+ */
+export type BrowserImportResult =
+  | { status: 'imported' | 'duplicate'; fileName: string; relPath: string }
+  | { status: 'no-library' | 'unsupported' }
+
+/** renderer に知らせる取り込みの結果 */
+export interface BrowserImportEvent {
+  status: 'imported' | 'duplicate'
+  fileName: string
+  /** 登録できた画像の ID (「表示」ボタン用) */
+  id: number | null
+}
+
+/** ブラウザから取り込んだ画像の取り込み元 (情報パネルに出す) */
+export interface ImageSource {
+  pageUrl: string | null
+  imageUrl: string | null
+  /** 投稿者や投稿 ID を読み取れたサイト ('twitter' など) */
+  site: string | null
+  author: string | null
+  postId: string | null
+  importedAt: number
+}
+
+/** 設定画面で見せる受け口の情報 */
+export interface BrowserImportInfo {
+  status: ImportServerStatus
+  /** 拡張の設定画面に貼り付けてもらう合言葉 */
+  token: string
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -265,7 +317,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
   edgeClickRatio: 0.25,
   sortKey: 'path',
   sortOrder: 'asc',
-  copyExcludeTags: []
+  copyExcludeTags: [],
+  browserImport: false,
+  browserImportPort: BROWSER_IMPORT_DEFAULT_PORT
 }
 
 export const AVAILABLE_MODELS = [
@@ -316,6 +370,8 @@ export const IPC = {
   clearLog: 'log:clear',
   getSettings: 'settings:get',
   setSettings: 'settings:set',
+  getBrowserImport: 'browserImport:get',
+  regenerateImportToken: 'browserImport:regenerateToken',
   // main → renderer
   eventLibraryChanged: 'event:libraryChanged',
   eventScanProgress: 'event:scanProgress',
@@ -327,7 +383,9 @@ export const IPC = {
   /** ウィンドウの全画面状態が変わった (F11 以外、OS の操作で変わることもある) */
   eventFullScreen: 'event:fullScreen',
   /** Ctrl + / Ctrl - / Ctrl 0 (Electron 標準の画面ズームの代わりにサムネイルの大きさを変える) */
-  eventThumbZoom: 'event:thumbZoom'
+  eventThumbZoom: 'event:thumbZoom',
+  /** ブラウザ拡張から画像を取り込んだ */
+  eventBrowserImport: 'event:browserImport'
 } as const
 
 /**

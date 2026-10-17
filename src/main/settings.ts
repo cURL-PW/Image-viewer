@@ -1,4 +1,5 @@
 import { DEFAULT_SETTINGS, type AppSettings } from '@shared/types'
+import { generateToken } from './import-server'
 import type { LibraryDb } from './db'
 
 const KEY = 'app_settings'
@@ -38,7 +39,12 @@ export function normalizeSettings(input: Partial<AppSettings>): AppSettings {
       : DEFAULT_SETTINGS.sortKey,
     sortOrder: input.sortOrder === 'desc' ? 'desc' : 'asc',
     // 正規表現として壊れているものも残す (設定画面で直せるように)。照合時に無視する
-    copyExcludeTags: normalizePatterns(input.copyExcludeTags)
+    copyExcludeTags: normalizePatterns(input.copyExcludeTags),
+    browserImport: input.browserImport === true,
+    // 1024 未満は OS によって管理者権限が要るので使わせない
+    browserImportPort: Math.round(
+      clamp(input.browserImportPort as number, 1024, 65535, DEFAULT_SETTINGS.browserImportPort)
+    )
   }
 }
 
@@ -78,3 +84,19 @@ export class SettingsStore {
 
 /** ルートフォルダの復帰用。設定テーブルに直接持たせる。 */
 export const LAST_ROOT_KEY = 'last_root_id'
+
+/** ブラウザ拡張の合言葉。設定 (AppSettings) とは分け、renderer へ配る設定に混ぜない */
+const IMPORT_TOKEN_KEY = 'browser_import_token'
+
+/** 保存済みの合言葉を返す。無ければ作って保存する */
+export function loadImportToken(db: LibraryDb): string {
+  const saved = db.getSetting(IMPORT_TOKEN_KEY)
+  if (saved) return saved
+  return regenerateImportToken(db)
+}
+
+export function regenerateImportToken(db: LibraryDb): string {
+  const token = generateToken()
+  db.setSetting(IMPORT_TOKEN_KEY, token)
+  return token
+}

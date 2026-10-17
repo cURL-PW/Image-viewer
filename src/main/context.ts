@@ -10,6 +10,7 @@ import { debugLog } from './debug-log'
 import type { DebugLog } from './debug-log'
 import type { DerivedImageCache } from './image-cache'
 import type { TaggerService } from './tagger/service'
+import type { ImportServer } from './import-server'
 
 export interface AppContext {
   db: LibraryDb
@@ -22,6 +23,8 @@ export interface AppContext {
   tagger: TaggerService
   /** ファイルに触れた操作の記録 (設定画面から参照・停止できる) */
   log: DebugLog
+  /** ブラウザ拡張から画像を受け取る受け口 (設定で有効にしたときだけ開く) */
+  importServer: ImportServer
   resolve: (id: number) => ResolvedImage | null
 }
 
@@ -94,4 +97,11 @@ export function broadcast(channel: string, payload: unknown): void {
   for (const window of BrowserWindow.getAllWindows()) {
     if (!window.isDestroyed()) window.webContents.send(channel, payload)
   }
+}
+
+/** 設定に合わせて受け口を開く / 閉じる */
+export async function applyImportServerSettings(ctx: AppContext): Promise<void> {
+  const { browserImport, browserImportPort } = ctx.settings.get()
+  if (browserImport) await ctx.importServer.start(browserImportPort)
+  else await ctx.importServer.stop()
 }

@@ -16,6 +16,7 @@
     "package": "npm run build && electron-builder --dir",
     "dist": "npm run build && electron-builder",
     "e2e": "npm run build && playwright test",
+    "extension": "node scripts/build-extension.mjs",
     "postinstall": "node scripts/install-electron-binary.mjs"
   },
   "dependencies": {
