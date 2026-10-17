@@ -111,6 +111,8 @@ export class CloudGuard extends EventEmitter<CloudGuardEvents> {
    * これがあれば推測が要らないので、フォルダ全体を止めずに 1 枚ずつ弾ける。
    */
   private placeholderIndex: Set<string> | null = null
+  /** 一覧の列挙が最後まで終わったか。途中経過の一覧で「残りはダウンロード済み」とは言えない */
+  private placeholderIndexComplete = false
   /** 一覧による判定の集計 (ログを溢れさせないため) */
   private indexHits = 0
   private indexMisses = 0
@@ -192,6 +194,19 @@ export class CloudGuard extends EventEmitter<CloudGuardEvents> {
     return this.placeholderIndex !== null
   }
 
+  /**
+   * 未ダウンロードかどうかを一覧だけで言い切れるか。
+   * 列挙が終わっていれば、一覧に無いファイルはダウンロード済みとみなせる
+   */
+  get hasCompleteIndex(): boolean {
+    return this.placeholderIndex !== null && this.placeholderIndexComplete
+  }
+
+  /** 一覧に未ダウンロードとして載っているか。`hasCompleteIndex` のときだけ意味がある */
+  isListedNotDownloaded(filePath: string): boolean {
+    return this.placeholderIndex?.has(normalizePath(filePath)) ?? false
+  }
+
   /** ダウンロード済みになったファイルを一覧から外す。 */
   markDownloaded(filePath: string): void {
     if (this.placeholderIndex === null) return
@@ -207,8 +222,9 @@ export class CloudGuard extends EventEmitter<CloudGuardEvents> {
    * 判定が外れることはありうる。そのときに全部読みに行かないよう、
    * 遅さの遮断器は最後の砦として残しておく。
    */
-  setPlaceholderIndex(paths: Set<string> | null): void {
+  setPlaceholderIndex(paths: Set<string> | null, complete = true): void {
     this.placeholderIndex = paths
+    this.placeholderIndexComplete = paths !== null && complete
     this.indexHits = 0
     this.indexMisses = 0
     debugLog().log({

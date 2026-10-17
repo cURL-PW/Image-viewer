@@ -169,7 +169,7 @@ export class TaggerService {
     const rootPath = this.library.currentRootPath
     if (rootId === null || rootPath === null || this.downloadJob) return
 
-    const ids = this.db.queryImageIds(rootId, {
+    let ids = this.db.queryImageIds(rootId, {
       dir,
       recursive,
       includeTags: [],
@@ -178,6 +178,17 @@ export class TaggerService {
       sortKey: 'path',
       sortOrder: 'asc'
     })
+
+    // 未ダウンロードの一覧が出来上がっていれば、それに載っている写真だけを落とす。
+    // ダウンロード済みの写真まで 9 万枚を順に開き直すと、それだけで長い時間がかかる。
+    // (タグ付けは落とし終えた後に、ダウンロード済みのものも含めて通常どおり進む)
+    if (this.guard.hasCompleteIndex) {
+      const pending = new Set<number>()
+      for (const [relPath, entry] of this.db.allRelPaths(rootId)) {
+        if (this.guard.isListedNotDownloaded(path.resolve(rootPath, relPath))) pending.add(entry.id)
+      }
+      ids = ids.filter((id) => pending.has(id))
+    }
 
     const job = { cancelled: false }
     this.downloadJob = job

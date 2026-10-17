@@ -158,6 +158,24 @@ describe('CloudGuard の正確な一覧 (ファイル属性ベース)', () => {
     expect(await guard.isNotDownloaded('C:\\Photos\\local.jpg')).toBe(false)
   })
 
+  it('列挙が終わった一覧だけを「言い切れる一覧」として扱う', () => {
+    // 一括ダウンロードの対象を一覧で絞るため。途中経過の一覧で絞ると取りこぼす
+    const guard = new CloudGuard(OPTIONS)
+    expect(guard.hasCompleteIndex).toBe(false)
+
+    guard.setPlaceholderIndex(index(), false)
+    expect(guard.hasExactIndex).toBe(true)
+    expect(guard.hasCompleteIndex).toBe(false)
+
+    guard.setPlaceholderIndex(index())
+    expect(guard.hasCompleteIndex).toBe(true)
+    expect(guard.isListedNotDownloaded('C:\\Photos\\B.heic')).toBe(true)
+    expect(guard.isListedNotDownloaded('C:\\Photos\\local.jpg')).toBe(false)
+
+    guard.reset()
+    expect(guard.hasCompleteIndex).toBe(false)
+  })
+
   it('一覧があるときは全体を止めず、1 枚ずつ弾く', async () => {
     const guard = new CloudGuard(OPTIONS)
     guard.setPlaceholderIndex(index())
