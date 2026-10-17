@@ -192,6 +192,14 @@ const initialScan: ScanProgress = {
   download: null
 }
 
+/** 2 つの ID 列が同じ並びか */
+function sameIds(a: number[], b: number[]): boolean {
+  if (a === b) return true
+  if (a.length !== b.length) return false
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false
+  return true
+}
+
 export const useStore = create<State & Actions>((set, get) => {
   let requeryTimer: ReturnType<typeof setTimeout> | null = null
   let searchTimer: ReturnType<typeof setTimeout> | null = null
@@ -205,13 +213,30 @@ export const useStore = create<State & Actions>((set, get) => {
   // StrictMode では effect が 2 回走るため、購読の二重登録を防ぐ
   let initStarted = false
   const inFlightImages = new Set<number>()
+  /** 予約中の再クエリで、画像の一覧も引き直す必要があるか (タグの件数だけで済むなら false) */
+  let idsDirty = false
 
-  /** 連続する変更をまとめて 1 回だけ再クエリする。先に入っている予約を優先する。 */
-  const scheduleRefresh = (delay = REQUERY_DEBOUNCE): void => {
+  /**
+   * タグが付いただけで一覧の中身が変わりうるか。
+   * タグ条件も似た画像も使っていなければ、並びも顔ぶれもタグに左右されない。
+   */
+  const listDependsOnTags = (): boolean => {
+    const state = get()
+    return state.includeTags.length > 0 || state.excludeTags.length > 0 || state.similarTo !== null
+  }
+
+  /**
+   * 連続する変更をまとめて 1 回だけ再クエリする。先に入っている予約を優先する。
+   * `ids` が false ならタグ一覧だけを読み直す (タグ付けの完了通知)。
+   */
+  const scheduleRefresh = (delay = REQUERY_DEBOUNCE, ids = true): void => {
+    if (ids) idsDirty = true
     if (requeryTimer) return
     requeryTimer = setTimeout(() => {
       requeryTimer = null
-      void get().refresh()
+      // 9 万件の一覧を引き直すのは重いので、タグ付けの通知だけなら必要なときに限る
+      if (idsDirty || listDependsOnTags()) void get().refresh()
+      idsDirty = false
       void get().refreshTags()
     }, delay)
   }
@@ -358,7 +383,7 @@ export const useStore = create<State & Actions>((set, get) => {
       window.api.onGoBack(() => {
         if (get().viewerIndex !== null) get().closeViewer()
       })
-      window.api.onImageTagged(() => scheduleRefresh(TAGGED_DEBOUNCE))
+      window.api.onImageTagged(() => scheduleRefresh(TAGGED_DEBOUNCE, false))
       window.api.onFullScreen((fullScreen) => set({ fullScreen }))
       // 単画像ビューではサムネイルが見えないので何もしない
       window.api.onThumbZoom((delta) => {
@@ -577,7 +602,8 @@ export const useStore = create<State & Actions>((set, get) => {
         viewerIndex = moved !== -1 ? moved : Math.min(viewerIndex, ids.length - 1)
         if (ids.length === 0) viewerIndex = null
       }
-      set({ ids, loading: false, viewerIndex })
+      // 中身が同じなら前の配列を使い続ける。グリッドが表示範囲を計算し直さずに済む
+      set({ ids: sameIds(state.ids, ids) ? state.ids : ids, loading: false, viewerIndex })
     },
 
     async refreshTree() {
@@ -715,8 +741,9 @@ export const useStore = create<State & Actions>((set, get) => {
       const start = from === -1 ? to : Math.min(from, to)
       const end = from === -1 ? to : Math.max(from, to)
       const range = ids.slice(start, end + 1)
-      const merged =
-        mode === 'rangeAdd' ? [...selection, ...range.filter((r) => !selection.includes(r))] : range
+      // 選択済みの判定は Set で引く (配列の includes だと数万件 × 数万件になる)
+      const already = mode === 'rangeAdd' ? new Set(selection) : null
+      const merged = already ? [...selection, ...range.filter((r) => !already.has(r))] : range
       // 起点は動かさない (続けて Shift クリックすると同じ起点から選び直す)
       set({ selection: merged, selectionAnchor: from === -1 ? id : selectionAnchor })
     },

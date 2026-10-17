@@ -384,7 +384,7 @@ export class LibraryDb {
   }
 
   getImage(id: number): ImageRecord | null {
-    const row = this.db.prepare(`SELECT ${IMAGE_COLUMNS} FROM images WHERE id = ?`).get(id) as
+    const row = this.stmt(`SELECT ${IMAGE_COLUMNS} FROM images WHERE id = ?`).get(id) as
       | RawImage
       | undefined
     return row ? toImageRecord(row) : null
@@ -440,27 +440,54 @@ export class LibraryDb {
   queryImageIds(rootId: number, query: ImageQuery): number[] {
     const { where, params } = buildWhere(rootId, query)
     const order = buildOrder(query)
-    const rows = this.db
-      .prepare(`SELECT id FROM images WHERE ${where} ORDER BY ${order}`)
-      .all(...params) as { id: number }[]
-    return rows.map((row) => row.id)
+    const statement = this.db.prepare(`SELECT id FROM images WHERE ${where} ORDER BY ${order}`)
+    // 9 万件を 1 行ずつオブジェクトにすると、それだけで 100ms 以上かかる。配列で受け取る
+    statement.setReturnArrays(true)
+    const rows = statement.all(...params) as unknown as [number][]
+    return rows.map((row) => row[0])
   }
 
   /** 現在の絞り込みスコープ内に出現するタグを、出現枚数付きで返す。 */
   listTags(rootId: number, query: ImageQuery, limit = 500): TagInfo[] {
-    const { where, params } = buildWhere(rootId, query)
-    const rows = this.db
+    // 先にタグ ID ごとに数えてから名前を引く。1 行ずつ tags と結合してから
+    // まとめるより、集計の作業領域が小さく済む
+    let counts: string
+    let params: SQLInputValue[]
+    if (this.isWholeLibrary(rootId, query)) {
+      // ライブラリ全体で、ほかのライブラリの画像も無い = image_tags の全行が対象。
+      // 画像ごとの絞り込みを挟まずに、タグの索引だけで数えられる
+      counts = 'SELECT tag_id, COUNT(*) AS count FROM image_tags GROUP BY tag_id'
+      params = []
+    } else {
+      const scope = buildWhere(rootId, query)
+      counts = `SELECT tag_id, COUNT(*) AS count FROM image_tags
+                 WHERE image_id IN (SELECT id FROM images WHERE ${scope.where})
+                 GROUP BY tag_id`
+      params = scope.params
+    }
+    return this.db
       .prepare(
-        `SELECT t.id AS id, t.name AS name, t.category AS category, COUNT(*) AS count
-           FROM image_tags it
-           JOIN tags t ON t.id = it.tag_id
-          WHERE it.image_id IN (SELECT id FROM images WHERE ${where})
-          GROUP BY t.id
-          ORDER BY count DESC, t.name ASC
+        `SELECT t.id AS id, t.name AS name, t.category AS category, c.count AS count
+           FROM (${counts}) c
+           JOIN tags t ON t.id = c.tag_id
+          ORDER BY c.count DESC, t.name ASC
           LIMIT ?`
       )
       .all(...params, limit) as unknown as TagInfo[]
-    return rows
+  }
+
+  /**
+   * 絞り込みがライブラリ全体で、DB にほかのライブラリの画像が無いか。
+   * このときは「このライブラリの画像のタグ」= image_tags の全行になる
+   * (image_tags は外部キーで images に結び付いているので、持ち主の無い行は残らない)。
+   */
+  private isWholeLibrary(rootId: number, query: ImageQuery): boolean {
+    const { where } = buildWhere(rootId, query)
+    if (where !== 'root_id = ?') return false
+    const row = this.stmt('SELECT EXISTS (SELECT 1 FROM images WHERE root_id != ?) AS other').get(
+      rootId
+    ) as { other: number }
+    return row.other === 0
   }
 
   /** 選択中のタグは絞り込みで消えないよう、常に取得できるようにする。 */
