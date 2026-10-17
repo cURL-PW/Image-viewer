@@ -94,7 +94,7 @@ export async function refreshPlaceholderIndex(
     // 途中経過をそのつど門番へ渡す
     onProgress: (partial) => {
       if (ctx.library.currentRootPath !== rootPath) return
-      ctx.guard.setPlaceholderIndex(partial)
+      ctx.guard.setPlaceholderIndex(partial, false)
     }
   })
   // 待っている間にフォルダが切り替わっていたら捨てる
