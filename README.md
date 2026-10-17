@@ -316,4 +316,8 @@ incompatible with sharp` は、Electron が同梱する共有ライブラリと 
 
 ## ライセンス
 
-MIT
+このアプリ本体は [MIT License](LICENSE) です。
+
+- 配布物には、同梱している第三者ソフトウェアのライセンス一覧 `THIRD_PARTY_LICENSES.txt` と、その本文 (`licenses/`) が入ります。一覧は `npm run build` のときに `node_modules` から自動生成されます (`npm run licenses` で単独実行も可)。
+- 画像処理の libvips (sharp 経由) と HEIC デコーダの libheif-js は LGPL-3.0 です。どちらも改変せず、差し替え可能な別ファイル (`app.asar.unpacked`) として同梱しています。
+- タグ付けモデル ([SmilingWolf/wd-*-tagger-v3](https://huggingface.co/SmilingWolf)) は Apache-2.0 です。アプリには同梱せず、初回使用時に Hugging Face からダウンロードします。
