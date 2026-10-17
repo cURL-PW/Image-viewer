@@ -19,6 +19,15 @@ export function isHeifPath(filePath: string): boolean {
 }
 
 /**
+ * sharp で HEIF のコンテナ (寸法・EXIF) を読むときの入力オプション。
+ *
+ * sharp 同梱の libheif は既定でアイテム数を 16 個までに制限しているが、iPhone の HEIC は
+ * 48 枚のタイルなどで普通に超える ("Security limit exceeded: Number of references in iref box")。
+ * 画素の復号は WASM 側で行い、ここではヘッダを読むだけなので制限を外す。
+ */
+const HEIF_SHARP_OPTIONS = { failOn: 'none', unlimited: true } as const
+
+/**
  * EXIF (TIFF) バイト列から orientation (1-8) を取り出す。
  * sharp は HEIF でも生の EXIF バッファは返すが orientation を解釈してくれないため自前で読む。
  */
@@ -97,7 +106,7 @@ async function openHeif(filePath: string): Promise<OpenedImage> {
   // 画素は WASM 側で、EXIF はコンテナを読める sharp 側で取得する
   const [decoded, metadata] = await Promise.all([
     decode({ buffer: new Uint8Array(file) }),
-    sharp(file).metadata()
+    sharp(file, HEIF_SHARP_OPTIONS).metadata()
   ])
 
   const orientation = parseExifOrientation(metadata.exif)
@@ -154,11 +163,12 @@ export async function imageDimensions(
   filePath: string
 ): Promise<{ width: number; height: number } | null> {
   try {
-    const metadata = await sharp(filePath, { failOn: 'none' }).metadata()
+    const heif = isHeifPath(filePath)
+    const metadata = await sharp(filePath, heif ? HEIF_SHARP_OPTIONS : { failOn: 'none' }).metadata()
     if (!metadata.width || !metadata.height) return null
 
     // HEIF は sharp が orientation を解釈しないので、EXIF から自前で読む
-    const orientation = isHeifPath(filePath)
+    const orientation = heif
       ? parseExifOrientation(metadata.exif)
       : (metadata.orientation ?? 1)
 

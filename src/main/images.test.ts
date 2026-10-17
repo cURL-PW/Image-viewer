@@ -14,6 +14,8 @@ const FIXTURES = path.resolve('e2e/fixtures')
 const SAMPLE = path.join(FIXTURES, 'sample.heic')
 /** 480x640 で保存され、EXIF orientation=6 (時計回りに 90 度回して表示) が付いている */
 const ROTATED = path.join(FIXTURES, 'sample-rotated.heic')
+/** 64x48 の画像を 20 枚詰めた HEIC (アイテム数が 16 を超える)。先頭に EXIF orientation=6 */
+const MANY_ITEMS = path.join(FIXTURES, 'sample-many-items.heic')
 
 /** ビッグエンディアン (MM) の最小 EXIF を組み立てる。 */
 function exifBigEndian(orientation: number, withPrefix = true): Buffer {
@@ -154,6 +156,17 @@ describe('openImage (HEIC)', () => {
     expect(right[2]).toBeLessThan(90)
   })
 
+  it('アイテム数が 16 を超える HEIC (iPhone の写真など) も開ける', async () => {
+    // sharp の既定ではセキュリティ制限に掛かる
+    await expect(sharp(MANY_ITEMS).metadata()).rejects.toThrow(/Security limit/)
+
+    const { image, width, height } = await openImage(MANY_ITEMS)
+    // 保存時は 64x48。orientation=6 なので表示は 48x64 になる
+    expect([width, height]).toEqual([48, 64])
+    const meta = await sharp(await image.png().toBuffer()).metadata()
+    expect([meta.width, meta.height]).toEqual([48, 64])
+  })
+
   it('通常の形式も同じ入口で開ける', async () => {
     const jpeg = await sharp({
       create: { width: 30, height: 20, channels: 3, background: '#123456' }
@@ -178,6 +191,10 @@ describe('imageDimensions', () => {
 
   it('HEIC の EXIF orientation も反映する', async () => {
     expect(await imageDimensions(ROTATED)).toEqual({ width: 640, height: 480 })
+  })
+
+  it('アイテム数が 16 を超える HEIC でも寸法を返す', async () => {
+    expect(await imageDimensions(MANY_ITEMS)).toEqual({ width: 48, height: 64 })
   })
 
   it('読めないファイルは null', async () => {

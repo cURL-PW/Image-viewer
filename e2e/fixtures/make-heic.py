@@ -38,7 +38,19 @@ def main() -> None:
     exif[0x0112] = 6
     rotated.save(HERE / "sample-rotated.heic", format="HEIF", quality=80, exif=exif)
 
-    for name in ("sample.heic", "sample-rotated.heic"):
+    # 中のアイテムが 16 個を超える HEIC。iPhone の写真は 48 枚のタイル等で 16 を超えるため、
+    # sharp (libvips) 既定のセキュリティ制限に掛かる。ここでは複数画像を詰めて同じ状況を作る
+    frames = [draw_marker(64, 48) for _ in range(20)]
+    frames[0].save(
+        HERE / "sample-many-items.heic",
+        format="HEIF",
+        quality=50,
+        exif=exif,
+        save_all=True,
+        append_images=frames[1:],
+    )
+
+    for name in ("sample.heic", "sample-rotated.heic", "sample-many-items.heic"):
         path = HERE / name
         print(f"wrote {path} ({path.stat().st_size} bytes)")
 
