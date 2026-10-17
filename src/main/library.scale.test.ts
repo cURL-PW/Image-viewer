@@ -112,6 +112,53 @@ describe(`${COUNT.toLocaleString()} 枚が 1 フォルダにある場合`, () =>
   )
 
   it(
+    '2 回目の走査は登録済みのファイルを stat しない',
+    async () => {
+      // 起動のたびに 9 万枚を開き直していたのを、差分走査で避ける
+      const library = new Library(db)
+      const done = waitForScan(library)
+      const probe = installFsProbe(60_000)
+
+      await library.setRoot(root)
+      const found = await done
+      const counts = probe.counts()
+      probe.uninstall()
+      await library.stop()
+
+      expect(found).toBe(COUNT)
+      const stats = (counts['p:stat'] ?? 0) + (counts['p:lstat'] ?? 0) + (counts.stat ?? 0) + (counts.lstat ?? 0)
+      expect(stats).toBeLessThan(100)
+    },
+    600_000
+  )
+
+  it(
+    '2 回目の走査でも、閉じている間の追加と削除は拾う',
+    async () => {
+      const added = path.join(root, 'ZZZ_added.jpg')
+      const removed = path.join(root, 'IMG_089999.jpg')
+      await fsp.writeFile(added, '')
+      await fsp.rm(removed)
+
+      const library = new Library(db)
+      const done = waitForScan(library)
+      const rootId = await library.setRoot(root)
+      const found = await done
+      await library.stop()
+
+      expect(found).toBe(COUNT)
+      const names = db.allRelPaths(rootId)
+      expect(names.has('ZZZ_added.jpg')).toBe(true)
+      expect(names.has('IMG_089999.jpg')).toBe(false)
+
+      // 後のテストのために元へ戻す
+      await fsp.rm(added)
+      await fsp.writeFile(removed, '')
+    },
+    600_000
+  )
+
+  it(
     '走査を止めていても mtime を 0 で上書きしない',
     async () => {
       // 門番が stat を止めている状態を再現する
