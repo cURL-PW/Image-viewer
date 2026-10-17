@@ -170,6 +170,39 @@ test('単画像ビューに付与タグが表示され、クリックで絞り�
   await expect(window.locator('.panel--tags .chip', { hasText: chipName ?? '' })).toBeVisible()
 })
 
+test('タグで絞り込み中に追加された画像は、タグ付けが済んだ時点で一覧に入る', async () => {
+  const { writeImage } = await import('./fixtures')
+  const path = await import('node:path')
+  const fsp = await import('node:fs/promises')
+
+  // general は全画像に付くので、絞り込んでも 8 枚のまま
+  await tagRow('general').locator('.tag__main').click()
+  await expect(window.locator('.chip', { hasText: 'general' })).toBeVisible()
+  await expect(window.locator('.toolbar__count')).toHaveText('8 枚')
+
+  // タグ付けを止めておき、追加の通知で一覧を引き直した後にタグが付くようにする。
+  // タグ条件がある間は未スキャンの画像を出さないので、この時点ではまだ 8 枚
+  await window.evaluate("window.api.scanControl('pause')")
+  const added = path.join(fixture.root, 'b', '12.png')
+  await writeImage(added, 3)
+  await expect(window.locator('.status')).toContainText('一時停止中 (残り 1 枚)', {
+    timeout: 20_000
+  })
+  await window.waitForTimeout(1000)
+  await expect(window.locator('.toolbar__count')).toHaveText('8 枚')
+
+  // タグ付けの完了通知で一覧を引き直し、9 枚になる
+  await window.evaluate("window.api.scanControl('resume')")
+  await expect(window.locator('.status--done')).toHaveText('タグ付け完了 9 / 9', {
+    timeout: 30_000
+  })
+  await expect(window.locator('.toolbar__count')).toHaveText('9 枚', { timeout: 20_000 })
+
+  // 次のテストのために元の 8 枚へ戻す
+  await fsp.rm(added)
+  await expect(window.locator('.toolbar__count')).toHaveText('8 枚', { timeout: 20_000 })
+})
+
 test('新しく追加された画像も自動でタグ付けされる', async () => {
   const { writeImage } = await import('./fixtures')
   const path = await import('node:path')
