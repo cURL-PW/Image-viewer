@@ -8,7 +8,8 @@
   "private": true,
   "scripts": {
     "dev": "electron-vite dev",
-    "build": "npm run typecheck && electron-vite build",
+    "build": "npm run typecheck && electron-vite build && npm run licenses",
+    "licenses": "node scripts/third-party-licenses.mjs",
     "start": "electron-vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json && tsc --noEmit -p tsconfig.e2e.json",
     "test": "vitest run",
@@ -50,6 +51,14 @@
     "files": [
       "out/**/*",
       "package.json"
+    ],
+    "extraResources": [
+      "LICENSE",
+      "licenses/**",
+      {
+        "from": "out/THIRD_PARTY_LICENSES.txt",
+        "to": "THIRD_PARTY_LICENSES.txt"
+      }
     ],
     "npmRebuild": false,
     "asarUnpack": [
