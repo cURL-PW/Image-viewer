@@ -321,7 +321,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   provider: 'auto',
   autoScan: true,
   alwaysReadCloudFiles: false,
-  debugLog: true,
+  debugLog: false,
   thumbnailSize: 256,
   edgeClickRatio: 0.25,
   sortKey: 'path',

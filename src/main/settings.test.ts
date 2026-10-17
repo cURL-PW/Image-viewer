@@ -30,10 +30,10 @@ describe('normalizeSettings', () => {
     expect(normalizeSettings({ edgeClickRatio: 0.9 }).edgeClickRatio).toBe(0.45)
   })
 
-  it('デバッグログは既定で有効、明示的に false のときだけ無効', () => {
-    expect(normalizeSettings({}).debugLog).toBe(true)
-    expect(normalizeSettings({ debugLog: undefined }).debugLog).toBe(true)
-    expect(normalizeSettings({ debugLog: false }).debugLog).toBe(false)
+  it('デバッグログは既定で無効、明示的に true のときだけ有効', () => {
+    expect(normalizeSettings({}).debugLog).toBe(false)
+    expect(normalizeSettings({ debugLog: undefined }).debugLog).toBe(false)
+    expect(normalizeSettings({ debugLog: true }).debugLog).toBe(true)
   })
 
   it('除外タグは文字列だけを残し、空のものは捨てる', () => {

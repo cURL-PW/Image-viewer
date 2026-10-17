@@ -108,11 +108,12 @@ export default function CloudDiagnosticsPanel(): React.JSX.Element {
       <p className="field__hint">
         ファイルに触れた操作 (走査・監視・サムネイル・タグ付け) を 1 行ずつ記録します。
         どの経路が時間をかけているかを確かめるためのものです。
+        ファイルパスが残るので、既定ではオフです。
       </p>
       <label className="field__check">
         <input
           type="checkbox"
-          checked={settings?.debugLog !== false}
+          checked={settings?.debugLog === true}
           onChange={(event) => void updateSettings({ debugLog: event.target.checked })}
         />
         デバッグログを記録する

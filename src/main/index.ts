@@ -73,10 +73,11 @@ function createContext(): AppContext {
   const settings = new SettingsStore(db)
 
   // 何がファイルを触ってダウンロードを起こしているのかを実測で追うための記録。
-  // 原因が分かるまでは既定で有効。設定か IMAGE_VIEWER_DEBUG_LOG=0 で止められる。
+  // 既定では無効。設定で入れるか、IMAGE_VIEWER_DEBUG_LOG=1 / 0 で起動時に強制できる。
+  const envDebugLog = process.env.IMAGE_VIEWER_DEBUG_LOG
   const log = initDebugLog(
     path.join(userData, 'logs', 'debug.log'),
-    settings.get().debugLog && process.env.IMAGE_VIEWER_DEBUG_LOG !== '0'
+    envDebugLog === '1' || (envDebugLog !== '0' && settings.get().debugLog)
   )
   log.log({ kind: 'app-start', note: `${process.platform} electron ${process.versions.electron}` })
   // 「アプリは読んでいないはずなのにダウンロードが続く」を確かめるための計測。
