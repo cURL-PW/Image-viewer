@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { ImageInfo } from '@shared/api'
-import { TagCategory, imageUrl } from '@shared/types'
+import { TagCategory, imageUrl, type ImageSource } from '@shared/types'
 import { confirmAndTrash } from '../lib/trash'
 import { useStore } from '../store'
 import TagInput from './TagInput'
@@ -515,6 +515,8 @@ export default function ImageViewer(): React.JSX.Element | null {
           </button>
         </div>
 
+        {showTags && info?.source && <SourceLine source={info.source} />}
+
         {showTags && (
           <div className="viewer__tags">
             {info === null ? (
@@ -559,6 +561,60 @@ export default function ImageViewer(): React.JSX.Element | null {
           </div>
         )}
       </div>
+    </div>
+  )
+}
+
+/** 長い URL を「ホスト名 + パスの頭」程度に縮めて見せる (全体は title に入れる) */
+function shortUrl(href: string): string {
+  try {
+    const url = new URL(href)
+    const rest = `${url.pathname}${url.search}`
+    const text = `${url.hostname}${rest === '/' ? '' : rest}`
+    return text.length > 60 ? `${text.slice(0, 57)}…` : text
+  } catch {
+    return href
+  }
+}
+
+/** Twitter (X) の投稿への URL。読み取った値が ID らしくなければ作らない */
+function tweetUrl(source: ImageSource): string | null {
+  if (source.site !== 'twitter' || !source.postId || !/^\d+$/.test(source.postId)) return null
+  const author = source.author && /^\w{1,50}$/.test(source.author) ? source.author : 'i'
+  return `https://x.com/${author}/status/${source.postId}`
+}
+
+/** ブラウザから取り込んだ画像の取り込み元。リンクは既定のブラウザで開く */
+function SourceLine({ source }: { source: ImageSource }): React.JSX.Element {
+  const tweet = tweetUrl(source)
+  return (
+    <div className="viewer__source" data-testid="image-source">
+      <span className="viewer__source-label">取り込み元</span>
+      {source.pageUrl && (
+        <a href={source.pageUrl} target="_blank" rel="noreferrer" title={source.pageUrl}>
+          {shortUrl(source.pageUrl)}
+        </a>
+      )}
+      {source.site === 'twitter' && source.author && (
+        <span className="viewer__source-item">投稿者 @{source.author}</span>
+      )}
+      {source.site === 'twitter' && source.postId && (
+        <span className="viewer__source-item">
+          投稿 ID{' '}
+          {tweet ? (
+            <a href={tweet} target="_blank" rel="noreferrer" title={tweet}>
+              {source.postId}
+            </a>
+          ) : (
+            source.postId
+          )}
+        </span>
+      )}
+      {source.imageUrl && (
+        <a href={source.imageUrl} target="_blank" rel="noreferrer" title={source.imageUrl}>
+          画像の URL
+        </a>
+      )}
     </div>
   )
 }

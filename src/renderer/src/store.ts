@@ -39,6 +39,13 @@ const REQUERY_DEBOUNCE = 250
  */
 const TAGGED_DEBOUNCE = 1200
 
+/** 画面下に一瞬出す通知。action を付けるとボタンが出て、少し長く表示する */
+export interface Notice {
+  text: string
+  key: number
+  action?: { label: string; run: () => void }
+}
+
 interface State {
   root: RootInfo | null
   /** 登録済みライブラリ */
@@ -81,7 +88,7 @@ interface State {
   /** 画像の右クリックメニュー */
   contextMenu: ContextMenuState | null
   /** 画面下に一瞬だけ出す通知 (「コピーしました」など) */
-  notice: { text: string; key: number } | null
+  notice: Notice | null
   /** ウィンドウが全画面か。main からの通知で合わせる */
   fullScreen: boolean
   /** グリッドで選択中の画像 ID (選んだ順) */
@@ -143,7 +150,12 @@ interface Actions {
   setSettingsOpen(open: boolean): void
   openContextMenu(menu: ContextMenuState): void
   closeContextMenu(): void
-  showNotice(text: string): void
+  showNotice(text: string, action?: Notice['action']): void
+  /**
+   * 指定の画像を単画像ビューで開く。今の絞り込みに入っていなければ、
+   * 絞り込みを外してその画像のフォルダを表示してから開く (ブラウザから取り込んだ直後の「表示」)
+   */
+  showImage(id: number): Promise<void>
   setFullScreen(fullScreen: boolean): Promise<void>
   /** 表示上の回転を 90° 単位で変える (正で時計回り)。DB に記憶し、サムネイルにも反映する */
   rotate(id: number, delta: number): Promise<void>
@@ -351,6 +363,19 @@ export const useStore = create<State & Actions>((set, get) => {
       // 単画像ビューではサムネイルが見えないので何もしない
       window.api.onThumbZoom((delta) => {
         if (get().viewerIndex === null) get().zoomThumbnails(delta)
+      })
+      // ブラウザ拡張から取り込んだ。表示中の画面は変えず、知らせるだけにする
+      window.api.onBrowserImport((event) => {
+        const text =
+          event.status === 'imported'
+            ? `ブラウザから取り込みました: ${event.fileName}`
+            : `取り込み済みの画像です: ${event.fileName}`
+        const id = event.id
+        get().showNotice(
+          text,
+          id === null ? undefined : { label: '表示', run: () => void get().showImage(id) }
+        )
+        void get().refreshLibraries()
       })
 
       void get().refreshLibraries()
@@ -635,8 +660,32 @@ export const useStore = create<State & Actions>((set, get) => {
       if (get().contextMenu !== null) set({ contextMenu: null })
     },
 
-    showNotice(text) {
-      set({ notice: { text, key: Date.now() } })
+    showNotice(text, action) {
+      set({ notice: { text, key: Date.now(), action } })
+    },
+
+    async showImage(id) {
+      const index = get().ids.indexOf(id)
+      if (index !== -1) {
+        get().openViewer(index)
+        return
+      }
+      const [image] = await window.api.getImages([id])
+      if (!image) return
+      cancelSearchTimer()
+      appliedSearch = ''
+      set({
+        dir: image.dirPath,
+        includeTags: [],
+        excludeTags: [],
+        search: '',
+        favoritesOnly: false,
+        viewerIndex: null,
+        ...RESET_VIEW
+      })
+      await get().refresh()
+      void get().refreshTags()
+      get().openViewer(get().ids.indexOf(id))
     },
 
     select(id, mode) {

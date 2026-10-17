@@ -51,6 +51,8 @@ const api: RendererApi = {
   getScanProgress: () => ipcRenderer.invoke(IPC.getScanProgress),
   getSettings: () => ipcRenderer.invoke(IPC.getSettings),
   setSettings: (patch) => ipcRenderer.invoke(IPC.setSettings, patch),
+  getBrowserImport: () => ipcRenderer.invoke(IPC.getBrowserImport),
+  regenerateImportToken: () => ipcRenderer.invoke(IPC.regenerateImportToken),
 
   onLibraryChanged: (listener) => subscribe(IPC.eventLibraryChanged, listener),
   onScanProgress: (listener) => subscribe(IPC.eventScanProgress, listener),
@@ -59,7 +61,8 @@ const api: RendererApi = {
   onRootChanged: (listener) => subscribe(IPC.eventRootChanged, listener),
   onGoBack: (listener) => subscribe(IPC.eventGoBack, listener),
   onFullScreen: (listener) => subscribe(IPC.eventFullScreen, listener),
-  onThumbZoom: (listener) => subscribe(IPC.eventThumbZoom, listener)
+  onThumbZoom: (listener) => subscribe(IPC.eventThumbZoom, listener),
+  onBrowserImport: (listener) => subscribe(IPC.eventBrowserImport, listener)
 }
 
 contextBridge.exposeInMainWorld('api', api)

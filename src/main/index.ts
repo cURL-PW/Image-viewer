@@ -2,12 +2,20 @@ import path from 'node:path'
 import fs from 'node:fs'
 import { BrowserWindow, app, session, shell } from 'electron'
 import { IMAGE_PROTOCOL, IPC, THUMB_PROTOCOL, thumbnailGenerationSize } from '@shared/types'
-import { broadcast, cloudModeKey, openRoot, type AppContext } from './context'
+import {
+  applyImportServerSettings,
+  broadcast,
+  cloudModeKey,
+  openRoot,
+  type AppContext
+} from './context'
 import { LibraryDb } from './db'
 import { registerIpcHandlers } from './ipc'
 import { Library } from './library'
 import { createResolver, registerImageProtocolHandlers, registerImageSchemes } from './protocol'
-import { LAST_ROOT_KEY, SettingsStore } from './settings'
+import { LAST_ROOT_KEY, SettingsStore, loadImportToken } from './settings'
+import { ImportServer } from './import-server'
+import { BrowserImporter, MAX_IMPORT_BYTES, type ImportMeta } from './browser-import'
 import { TaggerService } from './tagger/service'
 import { CloudGuard, DEFAULT_CLOUD_GUARD_OPTIONS } from './cloud-guard'
 import { initDebugLog } from './debug-log'
@@ -127,7 +135,25 @@ function createContext(): AppContext {
     db.setSetting(cloudModeKey(rootPath), status.cloudFolder ? '1' : '')
   })
 
-  return { db, library, thumbs, display, settings, guard, tagger, resolve, log }
+  // 合言葉は作り直しに追従するよう、毎回 DB から読む
+  loadImportToken(db)
+  const importer = new BrowserImporter(db, library)
+  const importServer = new ImportServer({
+    token: () => loadImportToken(db),
+    hasLibrary: () => library.currentRootId !== null,
+    maxBytes: MAX_IMPORT_BYTES,
+    onImport: async (data, meta) => {
+      const { result, id } = await importer.import(data, (meta ?? {}) as ImportMeta)
+      log.log({ kind: 'browser-import', decision: 'allowed', note: result.status })
+      if (result.status === 'imported' || result.status === 'duplicate') {
+        broadcast(IPC.eventBrowserImport, { status: result.status, fileName: result.fileName, id })
+        return { status: 200, body: result }
+      }
+      return { status: result.status === 'no-library' ? 409 : 415, body: result }
+    }
+  })
+
+  return { db, library, thumbs, display, settings, guard, tagger, resolve, log, importServer }
 }
 
 function createWindow(): BrowserWindow {
@@ -251,6 +277,7 @@ if (!app.requestSingleInstanceLock()) {
     registerIpcHandlers(context)
 
     createWindow()
+    void applyImportServerSettings(context)
 
     // コマンドラインでの指定を優先し、なければ前回開いていたフォルダを復帰する
     const cliRoot = startupRoot(process.argv, process.env)
@@ -285,6 +312,7 @@ app.on('before-quit', (event) => {
     const current = context
     context = null
     try {
+      await current?.importServer.stop()
       await current?.tagger.dispose()
       await current?.library.stop()
       // 落ちる直前の行まで残す

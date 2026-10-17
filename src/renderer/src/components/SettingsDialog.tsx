@@ -2,6 +2,7 @@ import { AVAILABLE_MODELS, THUMBNAIL_SIZE_MAX, THUMBNAIL_SIZE_MIN } from '@share
 import { useStore } from '../store'
 import CloudDiagnosticsPanel from './CloudDiagnostics'
 import ExcludeTagsField from './ExcludeTagsField'
+import BrowserImportField from './BrowserImportField'
 
 export default function SettingsDialog(): React.JSX.Element | null {
   const settings = useStore((state) => state.settings)
@@ -158,6 +159,8 @@ export default function SettingsDialog(): React.JSX.Element | null {
           </section>
 
           <ExcludeTagsField />
+
+          <BrowserImportField />
 
           <section className="field">
             <label>クラウド同期フォルダの診断</label>

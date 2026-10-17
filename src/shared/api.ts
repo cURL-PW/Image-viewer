@@ -1,5 +1,8 @@
 import type {
   AppSettings,
+  BrowserImportEvent,
+  BrowserImportInfo,
+  ImageSource,
   CloudDiagnostics,
   CopyKind,
   DebugLogInfo,
@@ -22,6 +25,8 @@ import type {
 export interface ImageInfo {
   image: ImageRecord | null
   tags: ImageTag[]
+  /** ブラウザから取り込んだ画像なら、その取り込み元 */
+  source?: ImageSource | null
 }
 
 export interface TagListRequest {
@@ -93,6 +98,10 @@ export interface RendererApi {
   getScanProgress(): Promise<ScanProgress>
   getSettings(): Promise<AppSettings>
   setSettings(patch: Partial<AppSettings>): Promise<AppSettings>
+  /** ブラウザ拡張の受け口の状態と合言葉 */
+  getBrowserImport(): Promise<BrowserImportInfo>
+  /** 合言葉を作り直す (拡張側も貼り直しが必要になる) */
+  regenerateImportToken(): Promise<BrowserImportInfo>
 
   /** 各 on* は購読解除用の関数を返す。 */
   onLibraryChanged(listener: (change: LibraryChange) => void): () => void
@@ -106,4 +115,6 @@ export interface RendererApi {
   onFullScreen(listener: (fullScreen: boolean) => void): () => void
   /** Ctrl + (1) / Ctrl - (-1) / Ctrl 0 (0 = 既定に戻す) */
   onThumbZoom(listener: (delta: number) => void): () => void
+  /** ブラウザ拡張から画像を取り込んだ (重複で保存しなかった場合も来る) */
+  onBrowserImport(listener: (event: BrowserImportEvent) => void): () => void
 }

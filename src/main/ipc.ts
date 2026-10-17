@@ -5,11 +5,13 @@ import { BrowserWindow, clipboard, dialog, ipcMain, nativeImage, shell } from 'e
 import {
   IPC,
   type AppSettings,
+  type BrowserImportInfo,
   type DebugLogInfo,
   type FolderNode,
   type ImageQuery,
   type ImageRecord,
   type ImageTag,
+  type ImageSource,
   type LibraryInfo,
   type RootInfo,
   type ScanCommand,
@@ -23,7 +25,14 @@ import {
   normalizeRotation,
   thumbnailGenerationSize
 } from '@shared/types'
-import { closeRoot, cloudModeKey, openRoot, type AppContext } from './context'
+import {
+  applyImportServerSettings,
+  closeRoot,
+  cloudModeKey,
+  openRoot,
+  type AppContext
+} from './context'
+import { loadImportToken, regenerateImportToken } from './settings'
 import { openImage } from './images'
 import { excludeTags } from '@shared/tag-filter'
 import { sanitizeFilterData } from '@shared/saved-filter'
@@ -34,6 +43,7 @@ const SIMILAR_LIMIT = 200
 export interface ImageInfoResult {
   image: ImageRecord | null
   tags: ImageTag[]
+  source?: ImageSource | null
 }
 
 export interface TagListRequest {
@@ -165,7 +175,20 @@ export function registerIpcHandlers(ctx: AppContext): void {
         image = { ...image, ...dimensions }
       }
     }
-    return { image, tags: ctx.db.getImageTags(id) }
+    const rootId = ctx.library.currentRootId
+    const source = rootId !== null ? ctx.db.getImageSource(rootId, image.relPath) : null
+    return {
+      image,
+      tags: ctx.db.getImageTags(id),
+      source: source && {
+        pageUrl: source.pageUrl,
+        imageUrl: source.imageUrl,
+        site: source.site,
+        author: source.author,
+        postId: source.postId,
+        importedAt: source.importedAt
+      }
+    }
   })
 
   ipcMain.handle(IPC.revealImage, (_event, id: number): void => {
@@ -418,6 +441,9 @@ export function registerIpcHandlers(ctx: AppContext): void {
     if (changed.includes('debugLog')) {
       ctx.log.setEnabled(settings.debugLog)
     }
+    if (changed.includes('browserImport') || changed.includes('browserImportPort')) {
+      await applyImportServerSettings(ctx)
+    }
     if (
       changed.includes('modelId') ||
       changed.includes('generalThreshold') ||
@@ -435,4 +461,14 @@ export function registerIpcHandlers(ctx: AppContext): void {
     }
     return settings
   })
+
+  ipcMain.handle(IPC.getBrowserImport, (): BrowserImportInfo => ({
+    status: ctx.importServer.currentStatus,
+    token: loadImportToken(ctx.db)
+  }))
+
+  ipcMain.handle(IPC.regenerateImportToken, (): BrowserImportInfo => ({
+    status: ctx.importServer.currentStatus,
+    token: regenerateImportToken(ctx.db)
+  }))
 }

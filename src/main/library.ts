@@ -511,6 +511,37 @@ export class Library extends EventEmitter<LibraryEvents> {
   }
 
   /**
+   * アプリ自身が書き込んだファイル (ブラウザからの取り込み) を、監視の通知を待たずに登録する。
+   * 取り込んだ直後に「表示」できるよう ID をすぐ返す。監視は後から同じ内容を伝えてくるが、
+   * mtime と size が同じなので何も変わらない
+   */
+  async register(fullPath: string): Promise<number | null> {
+    const rootId = this.rootId
+    const rootPath = this.rootPath
+    if (rootId === null || rootPath === null) return null
+    const relPath = toRelPath(rootPath, fullPath)
+    if (relPath.startsWith('..') || !isSupportedImage(fullPath)) return null
+    const stats = await fs.stat(fullPath)
+    const { dirPath, fileName } = splitRelPath(relPath)
+    const result = this.db.upsertImage(rootId, {
+      relPath,
+      dirPath,
+      fileName,
+      mtime: Math.floor(stats.mtimeMs),
+      size: stats.size
+    })
+    if (result.added || result.changed) {
+      this.emit('change', {
+        added: result.added ? [result.id] : [],
+        updated: result.added ? [] : [result.id],
+        removed: [],
+        treeDirty: result.added
+      })
+    }
+    return result.id
+  }
+
+  /**
    * アプリ自身が消したファイル (ごみ箱へ移動) を、監視の通知を待たずに DB から外す。
    * 監視は後から同じパスの削除を伝えてくるが、その時点では DB に無いので何もしない
    */
