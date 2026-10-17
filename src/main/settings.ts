@@ -30,8 +30,8 @@ export function normalizeSettings(input: Partial<AppSettings>): AppSettings {
     provider: input.provider === 'cpu' ? 'cpu' : 'auto',
     autoScan: input.autoScan !== false,
     alwaysReadCloudFiles: input.alwaysReadCloudFiles === true,
-    // 原因調査のため既定で有効。環境変数でも切れるようにしてある
-    debugLog: input.debugLog !== false,
+    // ファイルパスが残るので既定では無効。調査するときだけ設定か環境変数で入れる
+    debugLog: input.debugLog === true,
     thumbnailSize: clamp(input.thumbnailSize as number, 96, 512, DEFAULT_SETTINGS.thumbnailSize),
     edgeClickRatio: clamp(input.edgeClickRatio as number, 0.05, 0.45, DEFAULT_SETTINGS.edgeClickRatio),
     sortKey: (['path', 'name', 'mtime', 'size'] as const).includes(input.sortKey as never)

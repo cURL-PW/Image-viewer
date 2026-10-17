@@ -6,6 +6,8 @@ import {
   type Locator,
   type Page
 } from '@playwright/test'
+import fs from 'node:fs'
+import path from 'node:path'
 import { createFixture, installDummyModel, removeFixture, type Fixture } from './fixtures'
 
 let app: ElectronApplication
@@ -62,6 +64,27 @@ test('設定ダイアログを開いて現在の実行プロバイダを確認�
     'CPU'
   )
   await window.screenshot({ path: `${SHOTS}/06-settings.png` })
+  await closeSettings()
+})
+
+test('デバッグログは既定でオフで、設定からオンにできる', async () => {
+  const logFile = path.join(fixture.userData, 'logs', 'debug.log')
+  await openSettings()
+  const checkbox = window.getByLabel('デバッグログを記録する')
+  await expect(checkbox).not.toBeChecked()
+  // 走査もタグ付けも済んでいるが、何も記録されていない
+  expect(fs.existsSync(logFile)).toBe(false)
+
+  await checkbox.check()
+  await expect(checkbox).toBeChecked()
+  await window.locator('.diagnostics').screenshot({ path: `${SHOTS}/06b-debug-log.png` })
+  await expect
+    .poll(() => (fs.existsSync(logFile) ? fs.readFileSync(logFile, 'utf8') : ''), {
+      timeout: 10_000
+    })
+    .toContain('記録を開始しました')
+
+  await checkbox.uncheck()
   await closeSettings()
 })
 

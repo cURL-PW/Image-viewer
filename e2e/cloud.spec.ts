@@ -38,7 +38,8 @@ test.beforeAll(async () => {
       '--disable-gpu'
     ],
     // すべての読み込みを「遅い」とみなさせる
-    env: { ...process.env, IMAGE_VIEWER_SLOW_READ_MS: '0' }
+    // デバッグログは既定でオフなので、起動直後の走査から記録させる
+    env: { ...process.env, IMAGE_VIEWER_SLOW_READ_MS: '0', IMAGE_VIEWER_DEBUG_LOG: '1' }
   })
   window = await app.firstWindow()
   await window.waitForLoadState('domcontentloaded')
