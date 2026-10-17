@@ -62,6 +62,7 @@ describe('BrowserImporter', () => {
   let db: LibraryDb
   let library: Library
   let importer: BrowserImporter
+  let target: 'imported' | 'root'
 
   beforeEach(async () => {
     base = await fsp.mkdtemp(path.join(os.tmpdir(), 'image-viewer-import-'))
@@ -69,7 +70,8 @@ describe('BrowserImporter', () => {
     await fsp.mkdir(root)
     db = new LibraryDb(path.join(base, 'library.db'))
     library = new Library(db)
-    importer = new BrowserImporter(db, library)
+    target = 'imported'
+    importer = new BrowserImporter(db, library, () => target)
   })
 
   afterEach(async () => {
@@ -127,6 +129,18 @@ describe('BrowserImporter', () => {
     const again = await importer.import(data, { fileName: 'green' })
     expect(again.result).toMatchObject({ status: 'imported', fileName: 'green.png' })
     expect(first.result.status).toBe('imported')
+  })
+
+  it('保存先を「直下」にしたライブラリでは、サブフォルダを作らず直下に保存する', async () => {
+    await library.setRoot(root)
+    target = 'root'
+    const { result } = await importer.import(await png('#0ff'), { fileName: 'cyan' })
+    expect(result).toEqual({ status: 'imported', fileName: 'cyan.png', relPath: 'cyan.png' })
+    expect(await fsp.readdir(root)).toEqual(['cyan.png'])
+
+    // 直下に保存したものも重複として扱える
+    const again = await importer.import(await png('#0ff'), { fileName: 'cyan' })
+    expect(again.result).toMatchObject({ status: 'duplicate', relPath: 'cyan.png' })
   })
 
   it('画像でないものは保存しない', async () => {

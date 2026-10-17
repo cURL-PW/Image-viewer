@@ -53,6 +53,7 @@ const api: RendererApi = {
   setSettings: (patch) => ipcRenderer.invoke(IPC.setSettings, patch),
   getBrowserImport: () => ipcRenderer.invoke(IPC.getBrowserImport),
   regenerateImportToken: () => ipcRenderer.invoke(IPC.regenerateImportToken),
+  setImportTarget: (target) => ipcRenderer.invoke(IPC.setImportTarget, target),
 
   onLibraryChanged: (listener) => subscribe(IPC.eventLibraryChanged, listener),
   onScanProgress: (listener) => subscribe(IPC.eventScanProgress, listener),

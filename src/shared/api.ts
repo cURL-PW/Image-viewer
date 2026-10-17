@@ -3,6 +3,7 @@ import type {
   BrowserImportEvent,
   BrowserImportInfo,
   ImageSource,
+  ImportTarget,
   CloudDiagnostics,
   CopyKind,
   DebugLogInfo,
@@ -102,6 +103,8 @@ export interface RendererApi {
   getBrowserImport(): Promise<BrowserImportInfo>
   /** 合言葉を作り直す (拡張側も貼り直しが必要になる) */
   regenerateImportToken(): Promise<BrowserImportInfo>
+  /** 開いているライブラリの取り込み先を変える */
+  setImportTarget(target: ImportTarget): Promise<BrowserImportInfo>
 
   /** 各 on* は購読解除用の関数を返す。 */
   onLibraryChanged(listener: (change: LibraryChange) => void): () => void

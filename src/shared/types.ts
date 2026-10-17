@@ -298,11 +298,20 @@ export interface ImageSource {
   importedAt: number
 }
 
+/**
+ * 取り込んだ画像の保存先。ライブラリごとに選ぶ。
+ * - imported: ライブラリ直下の Imported フォルダ
+ * - root: ライブラリ直下 (iCloud 写真のようにサブフォルダを同期しないフォルダ向け)
+ */
+export type ImportTarget = 'imported' | 'root'
+
 /** 設定画面で見せる受け口の情報 */
 export interface BrowserImportInfo {
   status: ImportServerStatus
   /** 拡張の設定画面に貼り付けてもらう合言葉 */
   token: string
+  /** 開いているライブラリの保存先。ライブラリを開いていなければ null */
+  target: ImportTarget | null
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -372,6 +381,7 @@ export const IPC = {
   setSettings: 'settings:set',
   getBrowserImport: 'browserImport:get',
   regenerateImportToken: 'browserImport:regenerateToken',
+  setImportTarget: 'browserImport:setTarget',
   // main → renderer
   eventLibraryChanged: 'event:libraryChanged',
   eventScanProgress: 'event:scanProgress',

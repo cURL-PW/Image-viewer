@@ -2,11 +2,11 @@ import { createHash, randomBytes } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import type { BrowserImportResult } from '@shared/types'
+import type { BrowserImportResult, ImportTarget } from '@shared/types'
 import type { LibraryDb } from './db'
 import type { Library } from './library'
 
-/** 取り込んだ画像を置く、ライブラリ直下のフォルダ */
+/** 取り込んだ画像を置く、ライブラリ直下のフォルダ (保存先が 'imported' のとき) */
 export const IMPORT_DIR = 'Imported'
 /** 1 枚あたりの上限。これより大きいものは画像ではないとみなして断る */
 export const MAX_IMPORT_BYTES = 200 * 1024 * 1024
@@ -155,7 +155,9 @@ export class BrowserImporter {
 
   constructor(
     private db: LibraryDb,
-    private library: Library
+    private library: Library,
+    /** 開いているライブラリの保存先 (ライブラリごとの設定) */
+    private target: (rootPath: string) => ImportTarget
   ) {}
 
   import(data: Buffer, meta: ImportMeta): Promise<ImportedFile> {
@@ -187,7 +189,8 @@ export class BrowserImporter {
       this.db.removeImageSource(rootId, previous.relPath)
     }
 
-    const dir = path.join(rootPath, IMPORT_DIR)
+    const inRoot = this.target(rootPath) === 'root'
+    const dir = inRoot ? rootPath : path.join(rootPath, IMPORT_DIR)
     await fs.mkdir(dir, { recursive: true })
     const fileName = uniqueFileName(dir, deriveBaseName(meta), ext)
     const fullPath = path.join(dir, fileName)
@@ -202,7 +205,7 @@ export class BrowserImporter {
       throw error
     }
 
-    const relPath = `${IMPORT_DIR}/${fileName}`
+    const relPath = inRoot ? fileName : `${IMPORT_DIR}/${fileName}`
     this.db.addImageSource(rootId, {
       relPath,
       sha256,

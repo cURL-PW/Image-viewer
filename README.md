@@ -183,6 +183,8 @@ IMAGE_VIEWER_ROOT=/path/to/images npm run dev
 
 ブラウザ拡張を入れると、ページ上の画像を右クリックメニュー「Image Viewer に取り込む」か `Alt+Shift+クリック` で、開いているライブラリの `Imported` フォルダに取り込めます。詳しい入れ方は [extension/README.md](extension/README.md) を見てください。
 
+保存先はライブラリごとに「Imported フォルダ」か「ライブラリ直下」を選べます。iCloud 写真のフォルダは中に作ったフォルダを同期しないので、「ライブラリ直下」にしてください。
+
 1. Image Viewer の設定で「ブラウザからの取り込みを受け付ける」をオンにする
 2. 表示されたポート番号と合言葉を、拡張の設定画面に貼り付けて「接続を確かめる」
 

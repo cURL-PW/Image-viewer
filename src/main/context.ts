@@ -2,6 +2,7 @@ import { BrowserWindow } from 'electron'
 import { LAST_ROOT_KEY } from './settings'
 import { listPlaceholders } from './win-placeholders'
 import type { LibraryDb } from './db'
+import type { ImportTarget } from '@shared/types'
 import type { Library } from './library'
 import type { ResolvedImage } from './protocol'
 import type { SettingsStore } from './settings'
@@ -31,6 +32,16 @@ export interface AppContext {
 /** クラウド判定をルートごとに覚えておくための設定キー。 */
 export function cloudModeKey(rootPath: string): string {
   return `cloud_mode:${rootPath}`
+}
+
+/** 取り込み先をルートごとに覚えておくための設定キー。 */
+export function importTargetKey(rootPath: string): string {
+  return `import_target:${rootPath}`
+}
+
+/** そのルートの取り込み先。未設定なら Imported フォルダ */
+export function loadImportTarget(db: LibraryDb, rootPath: string): ImportTarget {
+  return db.getSetting(importTargetKey(rootPath)) === 'root' ? 'root' : 'imported'
 }
 
 /**

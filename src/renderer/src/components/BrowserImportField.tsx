@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { BrowserImportInfo } from '@shared/types'
+import type { BrowserImportInfo, ImportTarget } from '@shared/types'
 import { useStore } from '../store'
 
 function statusText(info: BrowserImportInfo | null, enabled: boolean): string {
@@ -21,6 +21,7 @@ export default function BrowserImportField(): React.JSX.Element | null {
   const settings = useStore((state) => state.settings)
   const updateSettings = useStore((state) => state.updateSettings)
   const showNotice = useStore((state) => state.showNotice)
+  const rootId = useStore((state) => state.root?.id ?? null)
   const [info, setInfo] = useState<BrowserImportInfo | null>(null)
   const [port, setPort] = useState(String(settings?.browserImportPort ?? ''))
   const [editingPort, setEditingPort] = useState(false)
@@ -37,7 +38,7 @@ export default function BrowserImportField(): React.JSX.Element | null {
     return () => {
       cancelled = true
     }
-  }, [enabled, savedPort])
+  }, [enabled, savedPort, rootId])
 
   useEffect(() => {
     if (!editingPort && savedPort !== undefined) setPort(String(savedPort))
@@ -69,6 +70,10 @@ export default function BrowserImportField(): React.JSX.Element | null {
     showNotice('合言葉を作り直しました')
   }
 
+  const changeTarget = async (target: ImportTarget): Promise<void> => {
+    setInfo(await window.api.setImportTarget(target))
+  }
+
   const listening = enabled && info?.status.listening === true
 
   return (
@@ -83,8 +88,25 @@ export default function BrowserImportField(): React.JSX.Element | null {
         ブラウザからの取り込みを受け付ける
       </label>
       <p className="field__hint">
-        ブラウザ拡張「Image Viewer に取り込む」から送られた画像を、開いているライブラリの
-        <code>Imported</code> フォルダに保存します。受け口はこの PC の中 (127.0.0.1) からだけ届きます。
+        ブラウザ拡張「Image Viewer に取り込む」から送られた画像を、開いているライブラリに保存します。受け口はこの PC の中 (127.0.0.1) からだけ届きます。
+      </p>
+
+      <div className="browser-import__row">
+        <label htmlFor="browser-import-target">保存先</label>
+        <select
+          id="browser-import-target"
+          className="browser-import__target"
+          value={info?.target ?? 'imported'}
+          disabled={!info || info.target === null}
+          onChange={(event) => void changeTarget(event.target.value as ImportTarget)}
+        >
+          <option value="imported">ライブラリ直下の Imported フォルダ</option>
+          <option value="root">ライブラリ直下 (フォルダを作らない)</option>
+        </select>
+      </div>
+      <p className="field__hint">
+        保存先はライブラリごとに覚えます。iCloud 写真のように、中に作ったフォルダを同期しない
+        フォルダでは「ライブラリ直下」を選んでください。
       </p>
 
       <div className="browser-import__row">
