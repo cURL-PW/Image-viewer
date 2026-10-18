@@ -18,19 +18,22 @@ Firefox と Chrome / Edge で同じコードが動きます。
 
 ## 入れ方
 
-配布用の zip はリポジトリのルートで `npm run extension` を実行すると `release/extension/` にできます。
+配布用の `.xpi` (Firefox) と `.zip` (Chrome / Edge) は、リポジトリのルートで `npm run extension` を実行すると
+`release/extension/` にできます。manifest はブラウザごとに使う項目だけに絞ってあり、展開したものも
+`release/extension/firefox/` と `release/extension/chrome/` に置かれます。
 
 ### Firefox
 
-Firefox の正式版は、Mozilla の署名がない拡張を常時入れておけません。
+Firefox 140 以降 (Android 版は 142 以降) が必要です。Firefox の正式版は、Mozilla の署名がない拡張を常時入れておけません。
 
-- **試すだけ**: `about:debugging#/runtime/this-firefox` →「一時的なアドオンを読み込む」で `extension/manifest.json` を選ぶ
+- **試すだけ**: `about:debugging#/runtime/this-firefox` →「一時的なアドオンを読み込む」で `release/extension/firefox/manifest.json` を選ぶ
   (Firefox を終了すると外れます)
 - **常用する**: Mozilla の開発者アカウント (https://addons.mozilla.org/developers/) で API キーを発行し、
   「自分用 (unlisted)」として署名します。署名済みの `.xpi` はファイルをドラッグするだけで入れられます。
 
   ```bash
-  npx web-ext sign --source-dir extension --channel unlisted \
+  npm run extension
+  npx web-ext sign --source-dir release/extension/firefox --channel unlisted \
     --api-key "$AMO_JWT_ISSUER" --api-secret "$AMO_JWT_SECRET"
   ```
 
@@ -40,7 +43,8 @@ Firefox の正式版は、Mozilla の署名がない拡張を常時入れてお�
 ### Chrome / Edge
 
 1. `chrome://extensions` (Edge は `edge://extensions`) を開き、「デベロッパーモード」をオンにする
-2. 「パッケージ化されていない拡張機能を読み込む」で `extension` フォルダを選ぶ
+2. 「パッケージ化されていない拡張機能を読み込む」で `release/extension/chrome` フォルダを選ぶ
+   (開発中は `extension` フォルダをそのまま選んでも動きます)
 
 ## 仕組み
 
