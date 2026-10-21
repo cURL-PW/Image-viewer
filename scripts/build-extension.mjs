@@ -1,6 +1,9 @@
 // ブラウザ拡張 (extension/) を配布用の zip にまとめる。
 //   release/extension/image-viewer-extension-<版>.zip  … Chrome / Edge 用 (ストア提出・展開して読み込み)
-//   release/extension/image-viewer-extension-<版>.xpi  … Firefox 用 (中身は同じ。署名は別途)
+//   release/extension/image-viewer-extension-<版>.xpi  … Firefox 用 (署名は別途)
+//   release/extension/firefox/, chrome/                … 同じ中身を展開したもの (web-ext sign や読み込み用)
+// extension/manifest.json は両方のブラウザでそのまま読み込めるよう background を二通り書いてあるが、
+// 配布物ではそれぞれのブラウザが使わない項目を落とす (AMO の検証で警告が出るため)。
 // 外部ツールに頼らないよう、zip は自前で書く (Windows でもそのまま動く)。
 import fs from 'node:fs/promises'
 import path from 'node:path'
@@ -89,15 +92,46 @@ function buildZip(entries) {
   return Buffer.concat([...locals, ...centrals, end])
 }
 
+/** Firefox は background.scripts を使う (service_worker は無視され、警告になる) */
+function firefoxManifest(manifest) {
+  const { service_worker: _unused, ...background } = manifest.background
+  return { ...manifest, background }
+}
+
+/** Chrome / Edge は service_worker を使う。scripts と Firefox 用の設定は要らない */
+function chromeManifest(manifest) {
+  const { scripts: _unused, ...background } = manifest.background
+  const { browser_specific_settings: _gecko, ...rest } = manifest
+  return { ...rest, background }
+}
+
 const manifest = JSON.parse(await fs.readFile(path.join(source, 'manifest.json'), 'utf8'))
-const files = await listFiles(source)
-const entries = await Promise.all(
+const files = (await listFiles(source)).filter((name) => name !== 'manifest.json')
+const common = await Promise.all(
   files.map(async (name) => ({ name, data: await fs.readFile(path.join(source, name)) }))
 )
-const zip = buildZip(entries)
 
 await fs.mkdir(outDir, { recursive: true })
 const base = path.join(outDir, `image-viewer-extension-${manifest.version}`)
-await fs.writeFile(`${base}.zip`, zip)
-await fs.writeFile(`${base}.xpi`, zip)
-console.log(`${files.length} ファイルをまとめました: ${path.relative(root, base)}.zip / .xpi`)
+const targets = [
+  { dir: 'firefox', ext: 'xpi', manifest: firefoxManifest(manifest) },
+  { dir: 'chrome', ext: 'zip', manifest: chromeManifest(manifest) }
+]
+for (const target of targets) {
+  const manifestEntry = {
+    name: 'manifest.json',
+    data: Buffer.from(`${JSON.stringify(target.manifest, null, 2)}\n`, 'utf8')
+  }
+  const entries = [manifestEntry, ...common].sort((a, b) => (a.name < b.name ? -1 : 1))
+  await fs.writeFile(`${base}.${target.ext}`, buildZip(entries))
+
+  const unpacked = path.join(outDir, target.dir)
+  await fs.rm(unpacked, { recursive: true, force: true })
+  for (const { name, data } of entries) {
+    await fs.mkdir(path.dirname(path.join(unpacked, name)), { recursive: true })
+    await fs.writeFile(path.join(unpacked, name), data)
+  }
+}
+console.log(
+  `${common.length + 1} ファイルをまとめました: ${path.relative(root, base)}.xpi (Firefox) / .zip (Chrome・Edge)`
+)
