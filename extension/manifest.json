@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Image Viewer に取り込む",
   "short_name": "Image Viewer",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "ページ上の画像を、PC で起動中の Image Viewer のライブラリへ取り込みます。",
   "icons": {
     "48": "icons/icon-48.png",

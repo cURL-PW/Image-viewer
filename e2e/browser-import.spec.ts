@@ -56,7 +56,12 @@ const PAGES: Record<string, string> = {
                style="position:absolute;inset:0;width:100%;height:100%">
         </div>
       </a>
-    </article>`
+    </article>`,
+  // 直リンク禁止 (Referer を見る) の画像を並べたページ。続けて素早く取り込む確認用
+  '/burst': `<!doctype html><meta charset="utf-8"><title>burst</title>
+    ${[1, 2, 3, 4, 5, 6]
+      .map((n) => `<img id="burst${n}" src="http://cdn.test/protected/burst${n}.png" width="120" height="90">`)
+      .join('')}`
 }
 
 function startSite(): Promise<void> {
@@ -65,6 +70,20 @@ function startSite(): Promise<void> {
     if (url.pathname in PAGES) {
       response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
       response.end(PAGES[url.pathname])
+      return
+    }
+    if (url.pathname.startsWith('/protected/')) {
+      // ページから来た読み込みでなければ断る (よくある直リンク禁止)
+      if (!(request.headers.referer ?? '').startsWith('http://gallery.test/')) {
+        response.writeHead(403)
+        response.end()
+        return
+      }
+      // 実際のサイトのように少し待たせ、取り込みが重なるようにする
+      setTimeout(() => {
+        response.writeHead(200, { 'Content-Type': 'image/png' })
+        response.end(images[url.pathname.slice('/protected'.length)])
+      }, 600)
       return
     }
     const key =
@@ -90,6 +109,8 @@ test.beforeAll(async () => {
   images['/thumb.png'] = await solid(160, 120, '#3366cc')
   images['/full.png'] = await solid(640, 480, '#3366cc')
   images['/plain.png'] = await solid(300, 200, '#cc3366')
+  const colors = ['#aa2222', '#22aa22', '#2222aa', '#aaaa22', '#22aaaa', '#aa22aa']
+  for (const [i, color] of colors.entries()) images[`/burst${i + 1}.png`] = await solid(120 + i, 90, color)
   images['tweet-small'] = await solid(200, 150, '#33aa66')
   images['tweet-orig'] = await solid(1200, 900, '#33aa66')
   await startSite()
@@ -173,7 +194,7 @@ test('拡張の設定画面で合言葉を貼ると、接続を確かめられ�
       `--disable-extensions-except=${EXTENSION}`,
       `--load-extension=${EXTENSION}`,
       // x.com と pbs.twimg.com をテスト用のサーバーへ向ける
-      `--host-resolver-rules=MAP x.com 127.0.0.1:${sitePort}, MAP pbs.twimg.com 127.0.0.1:${sitePort}, MAP gallery.test 127.0.0.1:${sitePort}`
+      `--host-resolver-rules=MAP x.com 127.0.0.1:${sitePort}, MAP pbs.twimg.com 127.0.0.1:${sitePort}, MAP gallery.test 127.0.0.1:${sitePort}, MAP cdn.test 127.0.0.1:${sitePort}`
     ]
   })
   const worker = browser.serviceWorkers()[0] ?? (await browser.waitForEvent('serviceworker'))
@@ -279,4 +300,49 @@ test('画像でないものは保存しない', async () => {
   })
   expect(response.status).toBe(415)
   expect(await response.json()).toEqual({ status: 'unsupported' })
+})
+
+test('続けて素早く取り込んでも、全部取り込め、それぞれの画像に結果の枠が付く', async () => {
+  const page = await browser.newPage()
+  await page.goto('http://gallery.test/burst')
+  // 拡張が画像に付ける枠 (outline) を記録しておく
+  await page.evaluate(() => {
+    // outline と outlineOffset で 2 回書き換わるので、同じ色は 1 回だけ数える
+    const seen: Record<string, string[]> = {}
+    ;(window as unknown as { outlines: typeof seen }).outlines = seen
+    new MutationObserver((records) => {
+      for (const record of records) {
+        const img = record.target as HTMLImageElement
+        const list = (seen[img.id] ??= [])
+        if (img.style.outline && !list.includes(img.style.outline)) list.push(img.style.outline)
+      }
+    }).observe(document.body, { attributes: true, attributeFilter: ['style'], subtree: true })
+  })
+  await page.keyboard.down('Alt')
+  await page.keyboard.down('Shift')
+  for (let n = 1; n <= 6; n++) {
+    const box = (await page.locator(`#burst${n}`).boundingBox())!
+    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2)
+    await page.waitForTimeout(250)
+  }
+  await page.keyboard.up('Shift')
+  await page.keyboard.up('Alt')
+  // 何枚かに同時に枠が付いているところを撮る
+  const outlined = (): Promise<number> =>
+    page.evaluate(() => Array.from(document.images).filter((img) => img.style.outline !== '').length)
+  await expect.poll(outlined).toBeGreaterThanOrEqual(2)
+  await page.screenshot({ path: `${SHOTS}/browser-import-burst.png` })
+  const burst = async (): Promise<string[]> =>
+    (await fs.readdir(fixture.root)).filter((name) => name.startsWith('burst')).sort()
+  await expect
+    .poll(burst, { timeout: 15_000 })
+    .toEqual(['burst1.png', 'burst2.png', 'burst3.png', 'burst4.png', 'burst5.png', 'burst6.png'])
+  // 取り込んだ画像それぞれが緑の枠で知らされる (最後にクリックした画像だけではない)
+  const green = 'rgb(60, 207, 110) solid 3px'
+  await expect
+    .poll(() => page.evaluate(() => (window as unknown as { outlines: Record<string, string[]> }).outlines))
+    .toEqual(Object.fromEntries([1, 2, 3, 4, 5, 6].map((n) => [`burst${n}`, [green]])))
+  // 枠は元に戻る
+  await expect.poll(outlined).toBe(0)
+  await page.close()
 })

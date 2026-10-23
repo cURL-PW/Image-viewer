@@ -15,8 +15,20 @@
   let options = lib.DEFAULT_OPTIONS
   /** 右クリックした画像 (メニューから取り込むとき用) */
   let contextTarget = null
-  /** 最後に取り込みを頼んだ画像 (結果を枠で知らせる) */
-  let lastTarget = null
+  /**
+   * 取り込みを頼んだ画像 (結果を枠で知らせる)。続けて頼んでも取り違えないよう、
+   * 頼んだごとに番号を振って覚えておく
+   */
+  const pending = new Map()
+  let nextRequestId = 1
+
+  function remember(img) {
+    const requestId = `${Date.now()}-${nextRequestId++}`
+    pending.set(requestId, img)
+    // 結果が来なかったものを溜め込まない
+    setTimeout(() => pending.delete(requestId), 5 * 60_000)
+    return requestId
+  }
 
   api.storage.local.get(lib.DEFAULT_OPTIONS).then((saved) => {
     options = lib.normalizeOptions(saved)
@@ -77,16 +89,26 @@
     }
   }
 
+  /** 枠を付ける前の outline と、元に戻すタイマー。枠が重なっても元の見た目に戻すため */
+  const flashing = new WeakMap()
+
   function flash(element, status) {
     if (!element || !element.isConnected) return
     const color =
       status === 'imported' ? '#3ccf6e' : status === 'duplicate' ? '#e6b33c' : '#e65050'
-    const previous = { outline: element.style.outline, offset: element.style.outlineOffset }
+    let state = flashing.get(element)
+    if (state) {
+      clearTimeout(state.timer)
+    } else {
+      state = { outline: element.style.outline, offset: element.style.outlineOffset, timer: 0 }
+      flashing.set(element, state)
+    }
     element.style.outline = `3px solid ${color}`
     element.style.outlineOffset = '-3px'
-    setTimeout(() => {
-      element.style.outline = previous.outline
-      element.style.outlineOffset = previous.offset
+    state.timer = setTimeout(() => {
+      element.style.outline = state.outline
+      element.style.outlineOffset = state.offset
+      flashing.delete(element)
     }, 900)
   }
 
@@ -106,8 +128,7 @@
     event.preventDefault()
     event.stopImmediatePropagation()
     if (event.type !== 'click') return
-    lastTarget = img
-    void api.runtime.sendMessage({ type: 'import', ...describe(img) })
+    void api.runtime.sendMessage({ type: 'import', requestId: remember(img), ...describe(img) })
   }
 
   function matches(event) {
@@ -123,12 +144,14 @@
     if (!message || typeof message !== 'object') return false
     if (message.type === 'context') {
       // 右クリックメニューから: 覚えておいた画像の情報を返す
-      lastTarget = contextTarget
-      sendResponse(describe(contextTarget, message))
+      sendResponse({ requestId: remember(contextTarget), ...describe(contextTarget, message) })
       return false
     }
     if (message.type === 'result') {
-      flash(lastTarget, message.status)
+      const img = pending.get(message.requestId)
+      if (!img) return false
+      pending.delete(message.requestId)
+      flash(img, message.status)
       return false
     }
     if (message.type === 'fetchInPage') {
