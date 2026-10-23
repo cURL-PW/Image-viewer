@@ -19,7 +19,7 @@ import { ImportServer } from './import-server'
 import { BrowserImporter, MAX_IMPORT_BYTES, type ImportMeta } from './browser-import'
 import { TaggerService } from './tagger/service'
 import { CloudGuard, DEFAULT_CLOUD_GUARD_OPTIONS } from './cloud-guard'
-import { initDebugLog } from './debug-log'
+import { initDebugLog, watchMainStalls } from './debug-log'
 import { installFsProbe } from './fs-probe'
 import { DerivedImageCache } from './image-cache'
 
@@ -83,6 +83,8 @@ function createContext(): AppContext {
   // 「アプリは読んでいないはずなのにダウンロードが続く」を確かめるための計測。
   // 自覚のない経路 (依存ライブラリの監視など) がファイルを開いていないかを数える
   installFsProbe()
+  // 本体が止まっていた時間 (その間は画面も取り込みも待たされる)
+  watchMainStalls()
 
   // クラウド同期フォルダで勝手にダウンロードが走らないようにする門番。
   // しきい値は E2E から下げられるようにしておく。
@@ -145,8 +147,16 @@ function createContext(): AppContext {
     hasLibrary: () => library.currentRootId !== null,
     maxBytes: MAX_IMPORT_BYTES,
     onImport: async (data, meta) => {
+      // 前の取り込みの順番待ちも含めた時間
+      const startedAt = Date.now()
       const { result, id } = await importer.import(data, (meta ?? {}) as ImportMeta)
-      log.log({ kind: 'browser-import', decision: 'allowed', note: result.status })
+      log.log({
+        kind: 'browser-import',
+        decision: 'allowed',
+        ms: Date.now() - startedAt,
+        target: result.status === 'imported' || result.status === 'duplicate' ? result.relPath : undefined,
+        note: result.status
+      })
       if (result.status === 'imported' || result.status === 'duplicate') {
         broadcast(IPC.eventBrowserImport, { status: result.status, fileName: result.fileName, id })
         return { status: 200, body: result }

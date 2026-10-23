@@ -1,7 +1,7 @@
 import { statSync } from 'node:fs'
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { BrowserWindow, clipboard, dialog, ipcMain, nativeImage, shell } from 'electron'
+import { BrowserWindow, clipboard, dialog, ipcMain, nativeImage, shell, type IpcMainInvokeEvent } from 'electron'
 import {
   IPC,
   type AppSettings,
@@ -37,6 +37,7 @@ import {
 } from './context'
 import { loadImportToken, regenerateImportToken } from './settings'
 import { openImage } from './images'
+import { debugLog } from './debug-log'
 import { excludeTags } from '@shared/tag-filter'
 import { sanitizeFilterData } from '@shared/saved-filter'
 
@@ -103,8 +104,30 @@ function listLibraries(ctx: AppContext): LibraryInfo[] {
   }))
 }
 
+/** 画面からの問い合わせのうち、本体を止めていたとみなす長さ (ms) */
+const SLOW_IPC_MS = 100
+
+/**
+ * ipcMain.handle と同じ。同期で走った部分 (DB の集計など) が長ければ記録する。
+ * その間は本体が止まり、ブラウザからの取り込みも待たされるため
+ */
+function handle<A extends unknown[], R>(
+  channel: string,
+  listener: (event: IpcMainInvokeEvent, ...args: A) => R
+): void {
+  ipcMain.handle(channel, (event, ...args) => {
+    const startedAt = performance.now()
+    try {
+      return listener(event, ...(args as A))
+    } finally {
+      const ms = performance.now() - startedAt
+      if (ms >= SLOW_IPC_MS) debugLog().log({ kind: 'ipc-slow', ms, note: channel })
+    }
+  })
+}
+
 export function registerIpcHandlers(ctx: AppContext): void {
-  ipcMain.handle(IPC.openFolder, async (event): Promise<RootInfo | null> => {
+  handle(IPC.openFolder, async (event): Promise<RootInfo | null> => {
     const window = BrowserWindow.fromWebContents(event.sender)
     const result = window
       ? await dialog.showOpenDialog(window, { properties: ['openDirectory'] })
@@ -115,11 +138,11 @@ export function registerIpcHandlers(ctx: AppContext): void {
     return currentRoot(ctx)
   })
 
-  ipcMain.handle(IPC.getRoot, (): RootInfo | null => currentRoot(ctx))
+  handle(IPC.getRoot, (): RootInfo | null => currentRoot(ctx))
 
-  ipcMain.handle(IPC.listLibraries, (): LibraryInfo[] => listLibraries(ctx))
+  handle(IPC.listLibraries, (): LibraryInfo[] => listLibraries(ctx))
 
-  ipcMain.handle(IPC.switchLibrary, async (_event, id: number): Promise<RootInfo | null> => {
+  handle(IPC.switchLibrary, async (_event, id: number): Promise<RootInfo | null> => {
     const rootPath = Number.isInteger(id) ? ctx.db.getRootPath(id) : null
     if (rootPath === null || !isDirectory(rootPath)) return currentRoot(ctx)
     if (id !== ctx.library.currentRootId) await openRoot(ctx, rootPath)
@@ -127,7 +150,7 @@ export function registerIpcHandlers(ctx: AppContext): void {
   })
 
   // 登録を外すだけで、フォルダの中身には触らない。開いていたものなら次の候補へ移る
-  ipcMain.handle(IPC.removeLibrary, async (_event, id: number): Promise<RootInfo | null> => {
+  handle(IPC.removeLibrary, async (_event, id: number): Promise<RootInfo | null> => {
     const rootPath = Number.isInteger(id) ? ctx.db.getRootPath(id) : null
     if (rootPath === null) return currentRoot(ctx)
 
@@ -144,14 +167,14 @@ export function registerIpcHandlers(ctx: AppContext): void {
     return currentRoot(ctx)
   })
 
-  ipcMain.handle(IPC.getTree, (): FolderNode | null => {
+  handle(IPC.getTree, (): FolderNode | null => {
     const rootId = ctx.library.currentRootId
     const rootPath = ctx.library.currentRootPath
     if (rootId === null || rootPath === null) return null
     return ctx.db.buildTree(rootId, path.basename(rootPath) || rootPath)
   })
 
-  ipcMain.handle(IPC.queryImages, (_event, query: ImageQuery): number[] => {
+  handle(IPC.queryImages, (_event, query: ImageQuery): number[] => {
     const rootId = ctx.library.currentRootId
     if (rootId === null) return []
     // 表示中のフォルダを優先してタグ付けする
@@ -159,12 +182,12 @@ export function registerIpcHandlers(ctx: AppContext): void {
     return ctx.db.queryImageIds(rootId, query)
   })
 
-  ipcMain.handle(IPC.getImages, (_event, ids: number[]): ImageRecord[] => {
+  handle(IPC.getImages, (_event, ids: number[]): ImageRecord[] => {
     if (!Array.isArray(ids)) return []
     return ctx.db.getImages(ids.filter((id) => Number.isInteger(id)).slice(0, 2000))
   })
 
-  ipcMain.handle(IPC.getImageInfo, async (_event, id: number): Promise<ImageInfoResult> => {
+  handle(IPC.getImageInfo, async (_event, id: number): Promise<ImageInfoResult> => {
     const target = ctx.resolve(id)
     if (!target) return { image: null, tags: [] }
 
@@ -195,12 +218,12 @@ export function registerIpcHandlers(ctx: AppContext): void {
     }
   })
 
-  ipcMain.handle(IPC.revealImage, (_event, id: number): void => {
+  handle(IPC.revealImage, (_event, id: number): void => {
     const target = ctx.resolve(id)
     if (target) shell.showItemInFolder(target.fullPath)
   })
 
-  ipcMain.handle(IPC.setRotation, (_event, id: number, rotation: number): number => {
+  handle(IPC.setRotation, (_event, id: number, rotation: number): number => {
     const target = ctx.resolve(id)
     if (!target) return 0
     const normalized = normalizeRotation(Number(rotation))
@@ -208,7 +231,7 @@ export function registerIpcHandlers(ctx: AppContext): void {
     return normalized
   })
 
-  ipcMain.handle(IPC.setFavorite, (_event, ids: number[], favorite: boolean): void => {
+  handle(IPC.setFavorite, (_event, ids: number[], favorite: boolean): void => {
     const rootId = ctx.library.currentRootId
     if (rootId === null || !Array.isArray(ids)) return
     ctx.db.setFavorite(rootId, ids, favorite === true)
@@ -216,7 +239,7 @@ export function registerIpcHandlers(ctx: AppContext): void {
 
   // ごみ箱へ移す。OS のごみ箱を使うので、間違えても元に戻せる。
   // 未ダウンロードのクラウドファイルも、中身を読まずにそのまま移せる
-  ipcMain.handle(IPC.trashImages, async (_event, ids: number[]): Promise<TrashResult> => {
+  handle(IPC.trashImages, async (_event, ids: number[]): Promise<TrashResult> => {
     const trashed: number[] = []
     let failed = 0
     for (const id of Array.isArray(ids) ? ids : []) {
@@ -236,7 +259,7 @@ export function registerIpcHandlers(ctx: AppContext): void {
     return { trashed, failed }
   })
 
-  ipcMain.handle(
+  handle(
     IPC.copyText,
     (_event, ids: number[], kind: 'path' | 'name'): boolean => {
       const lines = (Array.isArray(ids) ? ids : [])
@@ -249,38 +272,38 @@ export function registerIpcHandlers(ctx: AppContext): void {
     }
   )
 
-  ipcMain.handle(IPC.addTag, (_event, ids: number[], name: string): void => {
+  handle(IPC.addTag, (_event, ids: number[], name: string): void => {
     const rootId = ctx.library.currentRootId
     if (rootId === null || !Array.isArray(ids) || typeof name !== 'string') return
     ctx.db.addManualTag(rootId, ids, name.slice(0, 200))
   })
 
-  ipcMain.handle(IPC.removeTag, (_event, ids: number[], tagId: number): void => {
+  handle(IPC.removeTag, (_event, ids: number[], tagId: number): void => {
     const rootId = ctx.library.currentRootId
     if (rootId === null || !Array.isArray(ids)) return
     ctx.db.removeManualTag(rootId, ids, tagId)
   })
 
-  ipcMain.handle(IPC.tagsForImages, (_event, ids: number[]): TagInfo[] => {
+  handle(IPC.tagsForImages, (_event, ids: number[]): TagInfo[] => {
     const rootId = ctx.library.currentRootId
     if (rootId === null || !Array.isArray(ids)) return []
     return ctx.db.tagsForImages(rootId, ids)
   })
 
-  ipcMain.handle(IPC.findSimilar, (_event, id: number): number[] => {
+  handle(IPC.findSimilar, (_event, id: number): number[] => {
     const rootId = ctx.library.currentRootId
     if (rootId === null || !Number.isInteger(id)) return []
     const similar = ctx.db.findSimilar(rootId, id, SIMILAR_LIMIT)
     return [id, ...similar.map((row) => row.id)]
   })
 
-  ipcMain.handle(IPC.suggestTags, (_event, text: string): string[] =>
+  handle(IPC.suggestTags, (_event, text: string): string[] =>
     typeof text === 'string' ? ctx.db.suggestTags(text, 20) : []
   )
 
-  ipcMain.handle(IPC.listSavedFilters, (): SavedFilter[] => listSavedFilters(ctx))
+  handle(IPC.listSavedFilters, (): SavedFilter[] => listSavedFilters(ctx))
 
-  ipcMain.handle(
+  handle(
     IPC.saveFilter,
     (_event, name: string, data: SavedFilterData): SavedFilter[] => {
       const rootId = ctx.library.currentRootId
@@ -292,7 +315,7 @@ export function registerIpcHandlers(ctx: AppContext): void {
     }
   )
 
-  ipcMain.handle(IPC.renameSavedFilter, (_event, id: number, name: string): SavedFilter[] => {
+  handle(IPC.renameSavedFilter, (_event, id: number, name: string): SavedFilter[] => {
     const rootId = ctx.library.currentRootId
     const trimmed = filterName(name)
     if (rootId !== null && Number.isInteger(id) && trimmed !== '') {
@@ -301,26 +324,26 @@ export function registerIpcHandlers(ctx: AppContext): void {
     return listSavedFilters(ctx)
   })
 
-  ipcMain.handle(IPC.deleteSavedFilter, (_event, id: number): SavedFilter[] => {
+  handle(IPC.deleteSavedFilter, (_event, id: number): SavedFilter[] => {
     const rootId = ctx.library.currentRootId
     if (rootId !== null && Number.isInteger(id)) ctx.db.deleteSavedFilter(rootId, id)
     return listSavedFilters(ctx)
   })
 
-  ipcMain.handle(IPC.setFullScreen, (event, fullScreen: boolean): boolean => {
+  handle(IPC.setFullScreen, (event, fullScreen: boolean): boolean => {
     const window = BrowserWindow.fromWebContents(event.sender)
     if (!window) return false
     window.setFullScreen(fullScreen === true)
     return window.isFullScreen()
   })
 
-  ipcMain.handle(IPC.openImageExternal, async (_event, id: number): Promise<void> => {
+  handle(IPC.openImageExternal, async (_event, id: number): Promise<void> => {
     const target = ctx.resolve(id)
     if (target) await shell.openPath(target.fullPath)
   })
 
   // 右クリックメニューのコピー。renderer はフルパスを知らないので main 側で入れる
-  ipcMain.handle(IPC.copyImage, async (_event, id: number, kind: CopyKind): Promise<boolean> => {
+  handle(IPC.copyImage, async (_event, id: number, kind: CopyKind): Promise<boolean> => {
     const target = ctx.resolve(id)
     if (!target) return false
     switch (kind) {
@@ -358,7 +381,7 @@ export function registerIpcHandlers(ctx: AppContext): void {
     }
   })
 
-  ipcMain.handle(IPC.listTags, (_event, request: TagListRequest): TagInfo[] => {
+  handle(IPC.listTags, (_event, request: TagListRequest): TagInfo[] => {
     const rootId = ctx.library.currentRootId
     if (rootId === null) return []
 
@@ -383,25 +406,25 @@ export function registerIpcHandlers(ctx: AppContext): void {
     return search === '' ? tags : tags.filter((tag) => tag.name.toLowerCase().includes(search))
   })
 
-  ipcMain.handle(IPC.scanControl, async (_event, command: ScanCommand): Promise<ScanProgress> => {
+  handle(IPC.scanControl, async (_event, command: ScanCommand): Promise<ScanProgress> => {
     await ctx.tagger.handleCommand(command)
     return ctx.tagger.getProgress()
   })
 
-  ipcMain.handle(IPC.getScanProgress, (): ScanProgress => ctx.tagger.getProgress())
+  handle(IPC.getScanProgress, (): ScanProgress => ctx.tagger.getProgress())
 
-  ipcMain.handle(
+  handle(
     IPC.downloadFolder,
     async (_event, request: { dir: string; recursive: boolean }): Promise<void> => {
       await ctx.tagger.downloadFolder(request.dir ?? '', request.recursive !== false)
     }
   )
 
-  ipcMain.handle(IPC.cancelDownload, (): void => ctx.tagger.cancelDownload())
+  handle(IPC.cancelDownload, (): void => ctx.tagger.cancelDownload())
 
-  ipcMain.handle(IPC.getDiagnostics, (): CloudDiagnostics => ctx.guard.diagnostics)
+  handle(IPC.getDiagnostics, (): CloudDiagnostics => ctx.guard.diagnostics)
 
-  ipcMain.handle(IPC.getLogInfo, async (): Promise<DebugLogInfo> => {
+  handle(IPC.getLogInfo, async (): Promise<DebugLogInfo> => {
     let size = 0
     try {
       size = (await fs.stat(ctx.log.filePath)).size
@@ -412,12 +435,12 @@ export function registerIpcHandlers(ctx: AppContext): void {
   })
 
   // 「直近をコピー」。renderer 側でクリップボードへ入れて、そのまま貼って共有できる
-  ipcMain.handle(IPC.readLogTail, (_event, lines: number): Promise<string> => {
+  handle(IPC.readLogTail, (_event, lines: number): Promise<string> => {
     const count = Math.min(Math.max(Number(lines) || 300, 1), 5000)
     return ctx.log.tail(count)
   })
 
-  ipcMain.handle(IPC.openLogFolder, async (): Promise<void> => {
+  handle(IPC.openLogFolder, async (): Promise<void> => {
     // ファイルがまだ無いとエクスプローラが開かないので、空でも作っておく
     await ctx.log.flush()
     try {
@@ -429,11 +452,11 @@ export function registerIpcHandlers(ctx: AppContext): void {
     shell.showItemInFolder(ctx.log.filePath)
   })
 
-  ipcMain.handle(IPC.clearLog, (): Promise<void> => ctx.log.clear())
+  handle(IPC.clearLog, (): Promise<void> => ctx.log.clear())
 
-  ipcMain.handle(IPC.getSettings, (): AppSettings => ctx.settings.get())
+  handle(IPC.getSettings, (): AppSettings => ctx.settings.get())
 
-  ipcMain.handle(IPC.setSettings, async (_event, patch: Partial<AppSettings>): Promise<AppSettings> => {
+  handle(IPC.setSettings, async (_event, patch: Partial<AppSettings>): Promise<AppSettings> => {
     const { settings, changed } = ctx.settings.update(patch)
 
     if (changed.includes('thumbnailSize')) {
@@ -475,15 +498,15 @@ export function registerIpcHandlers(ctx: AppContext): void {
     }
   }
 
-  ipcMain.handle(IPC.getBrowserImport, (): BrowserImportInfo =>
+  handle(IPC.getBrowserImport, (): BrowserImportInfo =>
     browserImportInfo(loadImportToken(ctx.db))
   )
 
-  ipcMain.handle(IPC.regenerateImportToken, (): BrowserImportInfo =>
+  handle(IPC.regenerateImportToken, (): BrowserImportInfo =>
     browserImportInfo(regenerateImportToken(ctx.db))
   )
 
-  ipcMain.handle(IPC.setImportTarget, (_event, target: ImportTarget): BrowserImportInfo => {
+  handle(IPC.setImportTarget, (_event, target: ImportTarget): BrowserImportInfo => {
     const rootPath = ctx.library.currentRootPath
     if (rootPath !== null && (target === 'root' || target === 'imported')) {
       ctx.db.setSetting(importTargetKey(rootPath), target)
