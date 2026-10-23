@@ -9,8 +9,27 @@ if (typeof importScripts === 'function' && !globalThis.ImageViewerImport) import
   const api = globalThis.browser ?? globalThis.chrome
   const lib = globalThis.ImageViewerImport
   const MENU_ID = 'image-viewer-import'
-  /** ページと同じ Referer を付けるための一時的な規則の ID */
-  const REFERER_RULE_ID = 4781
+  /**
+   * ページと同じ Referer を付けるための一時的な規則の ID の範囲。
+   * 続けて取り込むと取りに行く処理が重なるので、1 枚ごとに別の ID を使う
+   * (同じ ID だと、先に終わった方が後の規則を消してしまう)
+   */
+  const REFERER_RULE_FIRST = 4781
+  const REFERER_RULE_COUNT = 1000
+  let nextRefererRule = 0
+  const usedRefererRules = new Set()
+
+  function allocRefererRule() {
+    for (let i = 0; i < REFERER_RULE_COUNT; i++) {
+      const id = REFERER_RULE_FIRST + ((nextRefererRule + i) % REFERER_RULE_COUNT)
+      if (!usedRefererRules.has(id)) {
+        nextRefererRule = (id - REFERER_RULE_FIRST + 1) % REFERER_RULE_COUNT
+        usedRefererRules.add(id)
+        return id
+      }
+    }
+    return null
+  }
   /** リンク先が画像かどうかを確かめる間に、HTML を全部読まないための上限 (ms) */
   const FETCH_TIMEOUT = 60_000
 
@@ -42,15 +61,20 @@ if (typeof importScripts === 'function' && !globalThis.ImageViewerImport) import
    * 対応していないブラウザでは付けずに進む
    */
   async function withReferer(url, referrer, work) {
+    let ruleId = null
     let added = false
     try {
       const host = new URL(url).hostname
       if (referrer && /^https?:/.test(url) && api.declarativeNetRequest) {
+        ruleId = allocRefererRule()
+      }
+      if (ruleId !== null) {
         await api.declarativeNetRequest.updateSessionRules({
-          removeRuleIds: [REFERER_RULE_ID],
+          // 前回の起動で消し損ねたものが残っていても入れ直せるように
+          removeRuleIds: [ruleId],
           addRules: [
             {
-              id: REFERER_RULE_ID,
+              id: ruleId,
               priority: 1,
               action: {
                 type: 'modifyHeaders',
@@ -75,9 +99,10 @@ if (typeof importScripts === 'function' && !globalThis.ImageViewerImport) import
     } finally {
       if (added) {
         await api.declarativeNetRequest
-          .updateSessionRules({ removeRuleIds: [REFERER_RULE_ID] })
+          .updateSessionRules({ removeRuleIds: [ruleId] })
           .catch(() => undefined)
       }
+      if (ruleId !== null) usedRefererRules.delete(ruleId)
     }
   }
 
@@ -189,7 +214,9 @@ if (typeof importScripts === 'function' && !globalThis.ImageViewerImport) import
     }
 
     if (tabId !== undefined && tabId >= 0) {
-      api.tabs.sendMessage(tabId, { type: 'result', status: result.status }, { frameId }).catch(() => undefined)
+      api.tabs
+        .sendMessage(tabId, { type: 'result', requestId: request.requestId, status: result.status }, { frameId })
+        .catch(() => undefined)
     }
     await notify(result)
     return result
@@ -225,6 +252,7 @@ if (typeof importScripts === 'function' && !globalThis.ImageViewerImport) import
           srcUrl: info.srcUrl,
           linkUrl: info.linkUrl || '',
           pageUrl: info.frameUrl || info.pageUrl || '',
+          requestId: null,
           twitter: null
         }
       }
