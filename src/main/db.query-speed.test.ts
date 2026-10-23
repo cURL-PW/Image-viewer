@@ -133,6 +133,26 @@ describe('タグ一覧の集計', () => {
     expect(db.listTags(root, query, 300)).toEqual(listTagsBefore(root, query, 300))
   })
 
+  it('タグ・名前・お気に入りで絞り込んでも、変更前と同じ結果になる (範囲外を引く数え方も含む)', () => {
+    const first = fillLibrary('/first', 300, 8)
+    fillLibrary('/second', 60, 9)
+    db.setFavorite(first, db.queryImageIds(first, query).slice(0, 40), true)
+    const filters: Partial<ImageQuery>[] = [
+      { excludeTags: [1] },
+      { includeTags: [1, 2], tagMode: 'or' },
+      { includeTags: [1, 2] },
+      { search: 'img' },
+      { search: 'IMG_1' },
+      { favoritesOnly: true }
+    ]
+    for (const scope of scopes) {
+      for (const filter of filters) {
+        const q = { ...scope, ...filter }
+        expect(db.listTags(first, q, 300)).toEqual(listTagsBefore(first, q, 300))
+      }
+    }
+  })
+
   it('画像の無いライブラリでは空になる', () => {
     fillLibrary('/lib', 50, 5)
     const empty = db.getOrCreateRoot('/empty')

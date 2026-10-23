@@ -235,3 +235,25 @@ export function setDebugLog(log: DebugLog | null): void {
 export function debugLog(): DebugLog {
   return current ?? DISABLED
 }
+
+/** 本体の処理が止まっていたとみなす長さ (ms) */
+const STALL_THRESHOLD = 300
+/** 止まっていないかを確かめる間隔 (ms) */
+const STALL_CHECK_INTERVAL = 100
+
+/**
+ * 本体 (main プロセス) の処理が止まっていた時間を記録する。
+ * 止まっている間は取り込みの受け口も応答できないので、何秒止まったかと、
+ * 直前に何をしていたか (ログの前後の行) で原因を追えるようにする
+ */
+export function watchMainStalls(): () => void {
+  let last = Date.now()
+  const timer = setInterval(() => {
+    const now = Date.now()
+    const stalled = now - last - STALL_CHECK_INTERVAL
+    last = now
+    if (stalled >= STALL_THRESHOLD) debugLog().log({ kind: 'main-busy', ms: stalled })
+  }, STALL_CHECK_INTERVAL)
+  timer.unref?.()
+  return () => clearInterval(timer)
+}

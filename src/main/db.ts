@@ -451,15 +451,22 @@ export class LibraryDb {
   listTags(rootId: number, query: ImageQuery, limit = 500): TagInfo[] {
     // 先にタグ ID ごとに数えてから名前を引く。1 行ずつ tags と結合してから
     // まとめるより、集計の作業領域が小さく済む
+    const scope = buildWhere(rootId, query)
     let counts: string
     let params: SQLInputValue[]
-    if (this.isWholeLibrary(rootId, query)) {
-      // ライブラリ全体で、ほかのライブラリの画像も無い = image_tags の全行が対象。
-      // 画像ごとの絞り込みを挟まずに、タグの索引だけで数えられる
-      counts = 'SELECT tag_id, COUNT(*) AS count FROM image_tags GROUP BY tag_id'
-      params = []
+    if (this.scopeIsMostImages(scope)) {
+      // 範囲が DB の画像の大半を占めるとき (ライブラリ直下の表示や、ほかのライブラリが
+      // ある状態でのライブラリ全体) は、範囲の画像を 1 枚ずつ引くより
+      // 「全体の集計 − 範囲外の集計」の方がずっと速い。全体はタグの索引だけで数えられる。
+      // 取り込みのたびにこの集計が走るので、9 万件で 0.6 秒かかっていたのを 0.1 秒にする
+      counts = `WITH whole AS (SELECT tag_id, COUNT(*) AS count FROM image_tags GROUP BY tag_id),
+                     outside AS (SELECT tag_id, COUNT(*) AS count FROM image_tags
+                                  WHERE image_id IN (SELECT id FROM images WHERE NOT (${scope.where}))
+                                  GROUP BY tag_id)
+                SELECT whole.tag_id AS tag_id, whole.count - IFNULL(outside.count, 0) AS count
+                  FROM whole LEFT JOIN outside ON outside.tag_id = whole.tag_id`
+      params = scope.params
     } else {
-      const scope = buildWhere(rootId, query)
       counts = `SELECT tag_id, COUNT(*) AS count FROM image_tags
                  WHERE image_id IN (SELECT id FROM images WHERE ${scope.where})
                  GROUP BY tag_id`
@@ -470,6 +477,7 @@ export class LibraryDb {
         `SELECT t.id AS id, t.name AS name, t.category AS category, c.count AS count
            FROM (${counts}) c
            JOIN tags t ON t.id = c.tag_id
+          WHERE c.count > 0
           ORDER BY c.count DESC, t.name ASC
           LIMIT ?`
       )
@@ -477,17 +485,15 @@ export class LibraryDb {
   }
 
   /**
-   * 絞り込みがライブラリ全体で、DB にほかのライブラリの画像が無いか。
-   * このときは「このライブラリの画像のタグ」= image_tags の全行になる
-   * (image_tags は外部キーで images に結び付いているので、持ち主の無い行は残らない)。
+   * 絞り込みの範囲に入る画像が、DB の全画像の半分を超えるか。
+   * 範囲の条件はどれも NULL にならない列だけを見るので、NOT (条件) がそのまま範囲外になる
    */
-  private isWholeLibrary(rootId: number, query: ImageQuery): boolean {
-    const { where } = buildWhere(rootId, query)
-    if (where !== 'root_id = ?') return false
-    const row = this.stmt('SELECT EXISTS (SELECT 1 FROM images WHERE root_id != ?) AS other').get(
-      rootId
-    ) as { other: number }
-    return row.other === 0
+  private scopeIsMostImages(scope: { where: string; params: SQLInputValue[] }): boolean {
+    const inside = this.db
+      .prepare(`SELECT COUNT(*) AS count FROM images WHERE ${scope.where}`)
+      .get(...scope.params) as { count: number }
+    const total = this.stmt('SELECT COUNT(*) AS count FROM images').get() as { count: number }
+    return inside.count * 2 > total.count
   }
 
   /** 選択中のタグは絞り込みで消えないよう、常に取得できるようにする。 */
