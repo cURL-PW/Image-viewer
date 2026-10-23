@@ -877,6 +877,11 @@ select,
 
 .viewer__image {
   display: block;
+  /*
+   * ステージは flex なので、既定のままだと拡大した幅がステージ幅まで縮められ、
+   * 元の大きさがステージより小さい画像は横に拡大できなくなる
+   */
+  flex: none;
   /* 端に余白ができる場合だけ中央に寄せる。overflow 時に切れないよう margin で行う */
   margin: auto;
   max-width: none;
@@ -942,6 +947,33 @@ select,
 
 .viewer__edge--next:hover:not(:disabled) {
   background: linear-gradient(to left, rgb(0 0 0 / 45%), transparent);
+}
+
+/*
+ * 拡大縮小中のページ送り。矢印のまわりだけを押せるようにし、それ以外はドラッグでパンできる。
+ * 場所が分かるよう矢印は薄く出したままにする
+ */
+.viewer__edge--compact {
+  top: 50%;
+  bottom: auto;
+  height: 64px;
+  transform: translateY(-50%);
+  opacity: 0.75;
+}
+
+/* 暗い余白の上でも見えるよう縁取りを付ける */
+.viewer__edge--compact .viewer__arrow {
+  box-shadow: 0 0 0 1px rgb(255 255 255 / 30%);
+}
+
+.viewer__edge--compact:disabled {
+  opacity: 0;
+  /* 押せないときはパンの邪魔をしない */
+  pointer-events: none;
+}
+
+.viewer__edge--compact:hover:not(:disabled) {
+  background: none;
 }
 
 .viewer__arrow {
