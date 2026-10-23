@@ -44,8 +44,8 @@ function tagClass(category: number): string {
  * 単画像ビュー。
  *
  * 既定は「画像全体が収まる大きさ」。はみ出さない範囲で最大にし、画面より小さい画像は
- * 引き伸ばさず等倍のまま中央に置く。ホイールでカーソル位置を中心に拡大縮小でき、
- * 全体表示のときだけ左右端のクリックでページ送りできる。
+ * 引き伸ばさず等倍のまま中央に置く。ホイールでカーソル位置を中心に拡大縮小できる。
+ * 全体表示のときは左右端の広い領域、拡大縮小中は左右中央の小さな矢印でページ送りできる。
  */
 export default function ImageViewer(): React.JSX.Element | null {
   const ids = useStore((state) => state.ids)
@@ -71,6 +71,8 @@ export default function ImageViewer(): React.JSX.Element | null {
   const stageRef = useRef<HTMLDivElement>(null)
   const dockRef = useRef<HTMLDivElement>(null)
   const [stageSize, setStageSize] = useState({ width: 0, height: 0 })
+  /** ステージの縦スクロールバーの幅。右の矢印をバーに重ねないために使う */
+  const [gutter, setGutter] = useState(0)
   const [natural, setNatural] = useState<{ width: number; height: number } | null>(null)
   const [scale, setScale] = useState(1)
   const [info, setInfo] = useState<ImageInfo | null>(null)
@@ -84,7 +86,7 @@ export default function ImageViewer(): React.JSX.Element | null {
 
   const currentId = viewerIndex !== null ? ids[viewerIndex] : undefined
   const image = currentId !== undefined ? images[currentId] : undefined
-  /** 等倍 (scale = 1) は「全体が収まる大きさ」。このときだけページ送りを出す */
+  /** 等倍 (scale = 1) は「全体が収まる大きさ」。このときだけ左右端の広い領域でページ送りする */
   const isFitAll = Math.abs(scale - 1) < 0.001
   const rotation = image?.rotation ?? 0
   /** 90° / 270° 回転では縦横が入れ替わる */
@@ -123,11 +125,13 @@ export default function ImageViewer(): React.JSX.Element | null {
   useLayoutEffect(() => {
     const element = stageRef.current
     if (!element) return
-    const observer = new ResizeObserver(([entry]) =>
+    const observer = new ResizeObserver(([entry]) => {
       setStageSize({ width: entry.contentRect.width, height: entry.contentRect.height })
-    )
+      setGutter(element.offsetWidth - element.clientWidth)
+    })
     observer.observe(element)
     setStageSize({ width: element.clientWidth, height: element.clientHeight })
+    setGutter(element.offsetWidth - element.clientWidth)
     return () => observer.disconnect()
   }, [])
 
@@ -360,31 +364,30 @@ export default function ImageViewer(): React.JSX.Element | null {
           )}
         </div>
 
-        {/* 全体表示のときだけ、左右端のクリックでページ送りできるようにする */}
-        {isFitAll && (
-          <>
-            <button
-              type="button"
-              className="viewer__edge viewer__edge--prev"
-              style={{ width: `${edgeRatio * 100}%` }}
-              onClick={() => step(-1)}
-              disabled={viewerIndex === 0}
-              aria-label="前の画像"
-            >
-              <span className="viewer__arrow">‹</span>
-            </button>
-            <button
-              type="button"
-              className="viewer__edge viewer__edge--next"
-              style={{ width: `${edgeRatio * 100}%` }}
-              onClick={() => step(1)}
-              disabled={viewerIndex >= ids.length - 1}
-              aria-label="次の画像"
-            >
-              <span className="viewer__arrow">›</span>
-            </button>
-          </>
-        )}
+        {/*
+          全体表示のときは左右端の広い領域をクリックしてページ送りする。
+          拡大縮小中は広い領域だとドラッグでのパンを邪魔するので、左右中央の小さな矢印だけにする
+        */}
+        <button
+          type="button"
+          className={`viewer__edge viewer__edge--prev${isFitAll ? '' : ' viewer__edge--compact'}`}
+          style={isFitAll ? { width: `${edgeRatio * 100}%` } : undefined}
+          onClick={() => step(-1)}
+          disabled={viewerIndex === 0}
+          aria-label="前の画像"
+        >
+          <span className="viewer__arrow">‹</span>
+        </button>
+        <button
+          type="button"
+          className={`viewer__edge viewer__edge--next${isFitAll ? '' : ' viewer__edge--compact'}`}
+          style={isFitAll ? { width: `${edgeRatio * 100}%` } : { right: `${gutter}px` }}
+          onClick={() => step(1)}
+          disabled={viewerIndex >= ids.length - 1}
+          aria-label="次の画像"
+        >
+          <span className="viewer__arrow">›</span>
+        </button>
       </div>
 
       {/* 先読み用。表示はしないがブラウザキャッシュに載せておく */}

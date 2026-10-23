@@ -178,7 +178,7 @@ test('画像の左右端クリックで前後の画像へ移動する', async ()
   await expect(window.locator('.viewer__edge--prev')).toBeDisabled()
 })
 
-test('ホイールで拡大縮小でき、ズーム中は端クリックが無効になる', async () => {
+test('ホイールで拡大縮小でき、ズーム中は小さな矢印でページ送りできる', async () => {
   await window.locator('.cell').first().click()
   await expect(zoomLabel()).toHaveText('100%')
 
@@ -192,14 +192,63 @@ test('ホイールで拡大縮小でき、ズーム中は端クリックが無�
   await window.mouse.wheel(0, -120)
   await expect(zoomLabel()).toHaveText('132%')
 
-  // 等倍でないので左右端のクリック領域は消える
-  await expect(window.locator('.viewer__edge--next')).toHaveCount(0)
+  // 等倍でないので広いクリック領域ではなく、左右中央の小さな矢印になる
+  const next = window.locator('.viewer__edge--next')
+  await expect(next).toHaveClass(/viewer__edge--compact/)
+  await expect(next).toBeVisible()
+  const nextBox = await next.boundingBox()
+  if (!nextBox) throw new Error('矢印が見つかりません')
+  expect(nextBox.width).toBeLessThan(box.width * 0.1)
+  expect(nextBox.height).toBeLessThan(box.height / 2)
+  // 右の矢印は縦スクロールバーに重ならない
+  const clientRight = await window
+    .locator('.viewer__stage')
+    .evaluate((stage) => stage.getBoundingClientRect().left + stage.clientWidth)
+  expect(nextBox.x + nextBox.width).toBeLessThanOrEqual(clientRight + 0.5)
   await window.screenshot({ path: `${SHOTS}/03-zoom.png` })
 
   // 移動量に比例して戻る (2 ノッチ分)
   await window.mouse.wheel(0, 240)
   await expect(zoomLabel()).toHaveText('100%')
-  await expect(window.locator('.viewer__edge--next')).toHaveCount(1)
+  await expect(next).not.toHaveClass(/viewer__edge--compact/)
+})
+
+test('ズーム中も矢印で前後へ移動でき、矢印以外はドラッグでパンできる', async () => {
+  await window.locator('.cell').first().click()
+  await expect(indexLabel()).toHaveText('1 / 8')
+  // 読み込み前は大きさが分からず拡大の基準がずれるので、読み込みを待つ
+  await expect
+    .poll(() => window.locator('.viewer__image').evaluate((img: HTMLImageElement) => img.naturalWidth))
+    .toBeGreaterThan(0)
+  const stage = window.locator('.viewer__stage')
+  const box = await stage.boundingBox()
+  if (!box) throw new Error('ステージが見つかりません')
+  await window.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
+  // 小さい画像なので、ステージからはみ出すまで (上限の 800%) 拡大する
+  for (let i = 0; i < 16; i++) await window.mouse.wheel(0, -120)
+  await expect(zoomLabel()).toHaveText('800%')
+  // 指定した大きさのまま表示され、ステージに合わせて縮められない
+  const imageWidth = await window
+    .locator('.viewer__image')
+    .evaluate((img) => img.getBoundingClientRect().width)
+  expect(imageWidth).toBeGreaterThan(box.width * 2)
+
+  // 左上の端 (矢印の外) をドラッグするとページ送りではなくパンになる
+  const before = await stage.evaluate((element) => element.scrollTop)
+  await window.mouse.move(box.x + 20, box.y + box.height * 0.2)
+  await window.mouse.down()
+  await window.mouse.move(box.x + 20, box.y + box.height * 0.1, { steps: 4 })
+  await window.mouse.up()
+  expect(await stage.evaluate((element) => element.scrollTop)).toBeGreaterThan(before)
+  await expect(indexLabel()).toHaveText('1 / 8')
+
+  // 先頭なので「前へ」は押せず、パンの邪魔もしない
+  await expect(window.locator('.viewer__edge--prev')).toBeDisabled()
+
+  await window.locator('.viewer__edge--next').click()
+  await expect(indexLabel()).toHaveText('2 / 8')
+  // 画像を切り替えると全体表示に戻る
+  await expect(zoomLabel()).toHaveText('100%')
 })
 
 test('ダブルクリックで全体表示に戻る', async () => {
