@@ -2,13 +2,14 @@ import fsp from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import sharp from 'sharp'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   BrowserImporter,
   IMPORT_DIR,
   deriveBaseName,
   detectImageExtension,
-  sanitizeBaseName
+  sanitizeBaseName,
+  writeIntoPlace
 } from './browser-import'
 import { LibraryDb } from './db'
 import { Library } from './library'
@@ -71,7 +72,7 @@ describe('BrowserImporter', () => {
     db = new LibraryDb(path.join(base, 'library.db'))
     library = new Library(db)
     target = 'imported'
-    importer = new BrowserImporter(db, library, () => target)
+    importer = new BrowserImporter(db, library, () => target, path.join(base, 'temp'))
   })
 
   afterEach(async () => {
@@ -143,6 +144,26 @@ describe('BrowserImporter', () => {
     expect(again.result).toMatchObject({ status: 'duplicate', relPath: 'cyan.png' })
   })
 
+  it('書きかけはライブラリの外に置き、保存先には完成したファイルだけを置く', async () => {
+    await library.setRoot(root)
+    target = 'root'
+    const seen: string[] = []
+    const realWrite = fsp.writeFile
+    const spy = vi.spyOn(fsp, 'writeFile').mockImplementation(async (file, ...rest) => {
+      seen.push(String(file))
+      return realWrite(file, ...rest)
+    })
+    try {
+      await importer.import(await png('#f0f'), { fileName: 'magenta' })
+    } finally {
+      spy.mockRestore()
+    }
+    expect(seen).toHaveLength(1)
+    expect(path.dirname(seen[0])).toBe(path.join(base, 'temp'))
+    expect(await fsp.readdir(root)).toEqual(['magenta.png'])
+    expect(await fsp.readdir(path.join(base, 'temp'))).toEqual([])
+  })
+
   it('画像でないものは保存しない', async () => {
     await library.setRoot(root)
     const { result } = await importer.import(Buffer.from('<html>not an image</html>'), {})
@@ -158,5 +179,36 @@ describe('BrowserImporter', () => {
     })
     const source = db.getImageSource(library.currentRootId as number, `${IMPORT_DIR}/yellow.png`)
     expect(source).toMatchObject({ pageUrl: null, imageUrl: null })
+  })
+})
+
+describe('writeIntoPlace', () => {
+  let base: string
+
+  beforeEach(async () => {
+    base = await fsp.mkdtemp(path.join(os.tmpdir(), 'image-viewer-place-'))
+  })
+
+  afterEach(async () => {
+    vi.restoreAllMocks()
+    await fsp.rm(base, { recursive: true, force: true })
+  })
+
+  it('別のドライブで移せないときはコピーし、作業ファイルを残さない', async () => {
+    vi.spyOn(fsp, 'rename').mockImplementationOnce(async () => {
+      throw Object.assign(new Error('cross-device'), { code: 'EXDEV' })
+    })
+    const dest = path.join(base, 'out.png')
+    await writeIntoPlace(path.join(base, 'temp'), dest, Buffer.from('data'))
+    expect(await fsp.readFile(dest, 'utf8')).toBe('data')
+    expect(await fsp.readdir(path.join(base, 'temp'))).toEqual([])
+  })
+
+  it('移せなかったときも作業ファイルを残さない', async () => {
+    vi.spyOn(fsp, 'rename').mockRejectedValueOnce(Object.assign(new Error('denied'), { code: 'EPERM' }))
+    await expect(writeIntoPlace(path.join(base, 'temp'), path.join(base, 'out.png'), Buffer.from('x'))).rejects.toThrow(
+      'denied'
+    )
+    expect(await fsp.readdir(path.join(base, 'temp'))).toEqual([])
   })
 })
