@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto'
-import { existsSync } from 'node:fs'
+import { constants as fsConstants, existsSync } from 'node:fs'
 import fs from 'node:fs/promises'
+import os from 'node:os'
 import path from 'node:path'
 import type { BrowserImportResult, ImportTarget } from '@shared/types'
 import type { LibraryDb } from './db'
@@ -147,6 +148,27 @@ export function uniqueFileName(dir: string, base: string, ext: string): string {
 }
 
 /**
+ * 作業フォルダで書き終えてから、保存先へ移す。
+ * 別のドライブで移せない (EXDEV) ときは、作業フォルダからコピーする。
+ * どちらの場合も、保存先に書きかけや一時ファイルの名前が現れることはない
+ */
+export async function writeIntoPlace(tempDir: string, fullPath: string, data: Buffer): Promise<void> {
+  await fs.mkdir(tempDir, { recursive: true })
+  const temp = path.join(tempDir, `importing-${randomBytes(6).toString('hex')}.part`)
+  try {
+    await fs.writeFile(temp, data, { flag: 'wx' })
+    try {
+      await fs.rename(temp, fullPath)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EXDEV') throw error
+      await fs.copyFile(temp, fullPath, fsConstants.COPYFILE_EXCL)
+    }
+  } finally {
+    await fs.rm(temp, { force: true })
+  }
+}
+
+/**
  * ブラウザから届いた画像を、開いているライブラリの Imported フォルダへ保存する。
  * 同時に届いても名前がぶつからないよう、1 枚ずつ順に処理する
  */
@@ -157,7 +179,14 @@ export class BrowserImporter {
     private db: LibraryDb,
     private library: Library,
     /** 開いているライブラリの保存先 (ライブラリごとの設定) */
-    private target: (rootPath: string) => ImportTarget
+    private target: (rootPath: string) => ImportTarget,
+    /**
+     * 書きかけを置く作業フォルダ。ライブラリの外に置く。
+     * iCloud for Windows は同期フォルダ内の一時ファイル (先頭が「.」など) を同期対象外として扱い、
+     * それを本来の名前に変えても新しいファイルとして上げてくれない。
+     * 外で書き終えてから移せば、完成したファイルが一度に置かれたように見える
+     */
+    private tempDir: string = path.join(os.tmpdir(), 'image-viewer-import')
   ) {}
 
   import(data: Buffer, meta: ImportMeta): Promise<ImportedFile> {
@@ -195,15 +224,7 @@ export class BrowserImporter {
     const fileName = uniqueFileName(dir, deriveBaseName(meta), ext)
     const fullPath = path.join(dir, fileName)
 
-    // 書きかけを監視に拾われないよう、隠しファイルに書いてから名前を変える
-    const temp = path.join(dir, `.importing-${randomBytes(6).toString('hex')}.part`)
-    try {
-      await fs.writeFile(temp, data, { flag: 'wx' })
-      await fs.rename(temp, fullPath)
-    } catch (error) {
-      await fs.rm(temp, { force: true })
-      throw error
-    }
+    await writeIntoPlace(this.tempDir, fullPath, data)
 
     const relPath = inRoot ? fileName : `${IMPORT_DIR}/${fileName}`
     this.db.addImageSource(rootId, {
