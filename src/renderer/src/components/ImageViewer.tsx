@@ -587,9 +587,33 @@ function tweetUrl(source: ImageSource): string | null {
   return `https://x.com/${author}/status/${source.postId}`
 }
 
+/** pixiv の作品ページとユーザーページの URL。読み取った値が ID らしくなければ作らない */
+function pixivUrls(source: ImageSource): { work: string | null; user: string | null } {
+  if (source.site !== 'pixiv') return { work: null, user: null }
+  const id = (value: string | null): string | null => (value && /^\d+$/.test(value) ? value : null)
+  const work = id(source.postId)
+  const user = id(source.author)
+  return {
+    work: work ? `https://www.pixiv.net/artworks/${work}` : null,
+    user: user ? `https://www.pixiv.net/users/${user}` : null
+  }
+}
+
+/** リンクにできればリンク、できなければ文字だけ */
+function MaybeLink({ href, text }: { href: string | null; text: string }): React.JSX.Element {
+  return href ? (
+    <a href={href} target="_blank" rel="noreferrer" title={href}>
+      {text}
+    </a>
+  ) : (
+    <>{text}</>
+  )
+}
+
 /** ブラウザから取り込んだ画像の取り込み元。リンクは既定のブラウザで開く */
 function SourceLine({ source }: { source: ImageSource }): React.JSX.Element {
   const tweet = tweetUrl(source)
+  const pixiv = pixivUrls(source)
   return (
     <div className="viewer__source" data-testid="image-source">
       <span className="viewer__source-label">取り込み元</span>
@@ -611,6 +635,16 @@ function SourceLine({ source }: { source: ImageSource }): React.JSX.Element {
           ) : (
             source.postId
           )}
+        </span>
+      )}
+      {source.site === 'pixiv' && source.author && (
+        <span className="viewer__source-item">
+          投稿者 ID <MaybeLink href={pixiv.user} text={source.author} />
+        </span>
+      )}
+      {source.site === 'pixiv' && source.postId && (
+        <span className="viewer__source-item">
+          作品 ID <MaybeLink href={pixiv.work} text={source.postId} />
         </span>
       )}
       {source.imageUrl && (
