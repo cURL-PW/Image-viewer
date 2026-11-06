@@ -11,7 +11,8 @@ import {
   test,
   type BrowserContext,
   type ElectronApplication,
-  type Page
+  type Page,
+  type Worker
 } from '@playwright/test'
 import { createFixture, removeFixture, type Fixture } from './fixtures'
 
@@ -19,6 +20,7 @@ import { createFixture, removeFixture, type Fixture } from './fixtures'
  * ブラウザ拡張から画像を取り込む一連の流れを、本物の拡張と本物のアプリで確かめる。
  * Chromium に extension/ を読み込み、テスト用のページで修飾キー＋クリックする。
  * x.com と pbs.twimg.com はテスト用のサーバーへ向け、Twitter の投稿を模したページを出す。
+ * www.pixiv.net と i.pximg.net も同様に、pixiv の作品ページと作品情報 (/ajax/illust/…) を模して出す。
  */
 
 test.describe.configure({ mode: 'serial' })
@@ -30,6 +32,7 @@ let browser: BrowserContext
 let site: http.Server
 let sitePort: number
 let browserProfile: string
+let worker: Worker
 
 const SHOTS = 'e2e/.output/screenshots'
 const EXTENSION = path.resolve('extension')
@@ -40,6 +43,8 @@ const images: Record<string, Buffer> = {}
 async function solid(width: number, height: number, color: string): Promise<Buffer> {
   return sharp({ create: { width, height, channels: 3, background: color } }).png().toBuffer()
 }
+
+const PIXIV_IMG = 'http://i.pximg.net'
 
 const PAGES: Record<string, string> = {
   // サムネイルが原寸画像へのリンクになっている、よくある作りのページ
@@ -61,7 +66,49 @@ const PAGES: Record<string, string> = {
   '/burst': `<!doctype html><meta charset="utf-8"><title>burst</title>
     ${[1, 2, 3, 4, 5, 6]
       .map((n) => `<img id="burst${n}" src="http://cdn.test/protected/burst${n}.png" width="120" height="90">`)
-      .join('')}`
+      .join('')}`,
+  // pixiv の作品ページを模したもの。表示しているのは縮小版 (master1200) で、下におすすめの別作品がある
+  '/artworks/146233172': `<!doctype html><meta charset="utf-8"><title>pixiv</title>
+    <div role="presentation">
+      ${[0, 1]
+        .map(
+          (n) => `<a href="${PIXIV_IMG}/img-original/img/2026/11/06/00/00/00/146233172_p${n}.png">
+        <img id="page${n}" src="${PIXIV_IMG}/img-master/img/2026/11/06/00/00/00/146233172_p${n}_master1200.jpg" width="120" height="90"></a>`
+        )
+        .join('')}
+    </div>
+    <a href="/artworks/999"><img id="other" src="${PIXIV_IMG}/c/250x250_80_a2/img-master/img/2026/01/01/00/00/00/999_p0_square1200.jpg" width="80" height="80"></a>`
+}
+
+/** 模した pixiv の作品。作品 ID → 投稿者 ID とページ数 */
+const PIXIV_WORKS: Record<string, { userId: string; pages: number }> = {
+  '146233172': { userId: '4242', pages: 5 },
+  '999': { userId: '77', pages: 2 }
+}
+/** 一度だけ失敗させる原寸画像 (取り直しの確認用) */
+const flaky = new Set(['/img-original/img/2026/11/06/00/00/00/146233172_p2.png'])
+
+function pixivOriginal(id: string, n: number): string {
+  const date = id === '999' ? '2026/01/01/00/00/00' : '2026/11/06/00/00/00'
+  return `${PIXIV_IMG}/img-original/img/${date}/${id}_p${n}.png`
+}
+
+/** pixiv の作品情報 (/ajax/illust/{id} と /ajax/illust/{id}/pages) を模して返す */
+function pixivAjax(pathname: string): unknown {
+  const match = pathname.match(/^\/ajax\/illust\/(\d+)(\/pages)?$/)
+  const work = match && PIXIV_WORKS[match[1]]
+  if (!match || !work) return null
+  const id = match[1]
+  if (match[2]) {
+    return {
+      error: false,
+      body: Array.from({ length: work.pages }, (_, n) => ({ urls: { original: pixivOriginal(id, n) } }))
+    }
+  }
+  return {
+    error: false,
+    body: { illustId: id, userId: work.userId, illustTitle: 'test', illustType: 1, pageCount: work.pages }
+  }
 }
 
 function startSite(): Promise<void> {
@@ -70,6 +117,32 @@ function startSite(): Promise<void> {
     if (url.pathname in PAGES) {
       response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
       response.end(PAGES[url.pathname])
+      return
+    }
+    if (url.pathname.startsWith('/ajax/illust/')) {
+      const body = pixivAjax(url.pathname)
+      response.writeHead(body ? 200 : 404, { 'Content-Type': 'application/json' })
+      response.end(JSON.stringify(body ?? { error: true, body: [] }))
+      return
+    }
+    if (url.pathname.startsWith('/img-') || url.pathname.startsWith('/c/')) {
+      // pixiv の画像は、pixiv のページからの Referer でないと断られる
+      if (!(request.headers.referer ?? '').startsWith('https://www.pixiv.net/')) {
+        response.writeHead(403)
+        response.end()
+        return
+      }
+      if (flaky.delete(url.pathname)) {
+        response.writeHead(500)
+        response.end()
+        return
+      }
+      const name = url.pathname.split('/').pop() ?? ''
+      const image = images[`pixiv-${name}`]
+      setTimeout(() => {
+        response.writeHead(image ? 200 : 404, { 'Content-Type': 'image/png' })
+        response.end(image)
+      }, 200)
       return
     }
     if (url.pathname.startsWith('/protected/')) {
@@ -113,6 +186,14 @@ test.beforeAll(async () => {
   for (const [i, color] of colors.entries()) images[`/burst${i + 1}.png`] = await solid(120 + i, 90, color)
   images['tweet-small'] = await solid(200, 150, '#33aa66')
   images['tweet-orig'] = await solid(1200, 900, '#33aa66')
+  for (const [id, work] of Object.entries(PIXIV_WORKS)) {
+    for (let n = 0; n < work.pages; n++) {
+      // 原寸はページごとに大きさを変えて、取り違えに気づけるようにする (色は作品ごとに変える)
+      images[`pixiv-${id}_p${n}.png`] = await solid(1000 + n, 800, id === '999' ? '#cc8844' : '#8844cc')
+      images[`pixiv-${id}_p${n}_master1200.jpg`] = await solid(120, 90, '#8844cc')
+      images[`pixiv-${id}_p${n}_square1200.jpg`] = await solid(80, 80, '#8844cc')
+    }
+  }
   await startSite()
 
   fixture = await createFixture()
@@ -194,10 +275,10 @@ test('拡張の設定画面で合言葉を貼ると、接続を確かめられ�
       `--disable-extensions-except=${EXTENSION}`,
       `--load-extension=${EXTENSION}`,
       // x.com と pbs.twimg.com をテスト用のサーバーへ向ける
-      `--host-resolver-rules=MAP x.com 127.0.0.1:${sitePort}, MAP pbs.twimg.com 127.0.0.1:${sitePort}, MAP gallery.test 127.0.0.1:${sitePort}, MAP cdn.test 127.0.0.1:${sitePort}`
+      `--host-resolver-rules=MAP x.com 127.0.0.1:${sitePort}, MAP pbs.twimg.com 127.0.0.1:${sitePort}, MAP gallery.test 127.0.0.1:${sitePort}, MAP cdn.test 127.0.0.1:${sitePort}, MAP www.pixiv.net 127.0.0.1:${sitePort}, MAP i.pximg.net 127.0.0.1:${sitePort}`
     ]
   })
-  const worker = browser.serviceWorkers()[0] ?? (await browser.waitForEvent('serviceworker'))
+  worker = browser.serviceWorkers()[0] ?? (await browser.waitForEvent('serviceworker'))
   const extensionId = new URL(worker.url()).host
 
   // 入れた直後に設定画面が開く
@@ -344,5 +425,87 @@ test('続けて素早く取り込んでも、全部取り込め、それぞれ�
     .toEqual(Object.fromEntries([1, 2, 3, 4, 5, 6].map((n) => [`burst${n}`, [green]])))
   // 枠は元に戻る
   await expect.poll(outlined).toBe(0)
+  await page.close()
+})
+
+/** ライブラリ直下にある pixiv の画像 (保存先は前のテストで「ライブラリ直下」にしてある) */
+async function pixivFiles(prefix: string): Promise<string[]> {
+  return (await fs.readdir(fixture.root)).filter((name) => name.startsWith(prefix)).sort()
+}
+
+async function width(name: string): Promise<number | undefined> {
+  return (await sharp(path.join(fixture.root, name)).metadata()).width
+}
+
+/** 右クリックメニューを選んだことにする (ブラウザのメニューそのものはテストから操作できない) */
+async function chooseMenu(page: Page, selector: string, menuItemId: string): Promise<void> {
+  await page.locator(selector).dispatchEvent('contextmenu')
+  const srcUrl = await page.locator(selector).evaluate((img: HTMLImageElement) => img.src)
+  await worker.evaluate(
+    async ({ menuItemId, srcUrl, pageUrl }) => {
+      const [tab] = await (globalThis as unknown as { chrome: ExtensionApi }).chrome.tabs.query({ url: pageUrl })
+      const background = (globalThis as unknown as {
+        ImageViewerImportBackground: { onMenuClicked(info: unknown, tab: unknown): Promise<void> }
+      }).ImageViewerImportBackground
+      await background.onMenuClicked({ menuItemId, srcUrl, frameId: 0, pageUrl }, tab)
+    },
+    { menuItemId, srcUrl, pageUrl: page.url() }
+  )
+}
+
+/** 拡張の中の chrome.* (テストのコードからは型が見えないので、使う分だけ書く) */
+interface ExtensionApi {
+  tabs: { query(query: { url: string }): Promise<unknown[]> }
+  action: { getBadgeText(details: object): Promise<string> }
+}
+
+const badge = (): Promise<string> =>
+  worker.evaluate(() => (globalThis as unknown as { chrome: ExtensionApi }).chrome.action.getBadgeText({}))
+
+test('pixiv: 右クリックの「Image Viewer に取り込む」は、その 1 枚を原寸で取り込む', async () => {
+  const page = await browser.newPage()
+  await page.goto('http://www.pixiv.net/artworks/146233172')
+  await chooseMenu(page, '#page1', 'image-viewer-import')
+  await expect.poll(() => pixivFiles('146233172_')).toEqual(['146233172_p1.png'])
+  expect(await width('146233172_p1.png')).toBe(1001)
+  await page.close()
+})
+
+test('pixiv: 作品ページで Alt+Shift+クリックすると、全ページを原寸で取り込み、投稿者と作品 ID を記録する', async () => {
+  const page = await browser.newPage()
+  await page.goto('http://www.pixiv.net/artworks/146233172')
+  await page.locator('#page0').click({ modifiers: ['Alt', 'Shift'] })
+
+  // 取り込み中はツールバーのアイコンに残りの枚数が出る
+  await expect.poll(badge, { intervals: [50] }).toMatch(/^[1-5]$/)
+  await expect
+    .poll(() => pixivFiles('146233172_'), { timeout: 20_000 })
+    .toEqual([0, 1, 2, 3, 4].map((n) => `146233172_p${n}.png`))
+  for (let n = 0; n < 5; n++) expect(await width(`146233172_p${n}.png`)).toBe(1000 + n)
+  await expect.poll(badge).toBe('')
+  // 表示している縮小版は保存していない
+  expect(await pixivFiles('146233172_p0_')).toEqual([])
+  // 開いている作品以外 (おすすめ) の画像は取り込んでいない
+  expect(await pixivFiles('999_')).toEqual([])
+  await page.close()
+
+  await window.locator('.notice__action', { hasText: '表示' }).click()
+  await expect(window.locator('.viewer__name')).toHaveText(/^146233172_p\d\.png$/)
+  const source = window.getByTestId('image-source')
+  await expect(source).toContainText('pixiv.net/artworks/146233172')
+  await expect(source).toContainText('投稿者 ID 4242')
+  await expect(source).toContainText('作品 ID 146233172')
+  await expect(source.locator('a', { hasText: '4242' })).toHaveAttribute('href', 'https://www.pixiv.net/users/4242')
+  await window.screenshot({ path: `${SHOTS}/pixiv-import-source.png` })
+  await window.keyboard.press('Escape')
+})
+
+test('pixiv: 右クリックの「この作品の全ページを取り込む」は、右クリックした画像の作品を取り込む', async () => {
+  const page = await browser.newPage()
+  await page.goto('http://www.pixiv.net/artworks/146233172')
+  await chooseMenu(page, '#other', 'image-viewer-import-pixiv-work')
+  await expect.poll(() => pixivFiles('999_'), { timeout: 15_000 }).toEqual(['999_p0.png', '999_p1.png'])
+  // 先に取り込んだ作品はそのまま (重複して保存しない)
+  expect(await pixivFiles('146233172_')).toHaveLength(5)
   await page.close()
 })

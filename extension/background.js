@@ -9,6 +9,9 @@ if (typeof importScripts === 'function' && !globalThis.ImageViewerImport) import
   const api = globalThis.browser ?? globalThis.chrome
   const lib = globalThis.ImageViewerImport
   const MENU_ID = 'image-viewer-import'
+  const MENU_WORK_ID = 'image-viewer-import-pixiv-work'
+  /** pixiv の原寸画像 (i.pximg.net) は、pixiv のページからの Referer でないと断られる */
+  const PIXIV_REFERRER = 'https://www.pixiv.net/'
   /**
    * ページと同じ Referer を付けるための一時的な規則の ID の範囲。
    * 続けて取り込むと取りに行く処理が重なるので、1 枚ごとに別の ID を使う
@@ -43,6 +46,13 @@ if (typeof importScripts === 'function' && !globalThis.ImageViewerImport) import
         id: MENU_ID,
         title: 'Image Viewer に取り込む',
         contexts: ['image']
+      })
+      // pixiv の作品ページでだけ出す
+      api.contextMenus.create({
+        id: MENU_WORK_ID,
+        title: 'この作品の全ページを Image Viewer に取り込む',
+        contexts: ['image'],
+        documentUrlPatterns: ['*://www.pixiv.net/artworks/*', '*://www.pixiv.net/*/artworks/*']
       })
     })
   }
@@ -168,14 +178,18 @@ if (typeof importScripts === 'function' && !globalThis.ImageViewerImport) import
     }
   }
 
-  async function notify(result) {
+  function notify(result) {
     const ok = result.status === 'imported' || result.status === 'duplicate'
+    return notifyText(ok, lib.resultMessage(result))
+  }
+
+  async function notifyText(ok, message) {
     try {
       await api.notifications.create({
         type: 'basic',
         iconUrl: api.runtime.getURL('icons/icon-96.png'),
         title: ok ? 'Image Viewer' : 'Image Viewer に取り込めませんでした',
-        message: lib.resultMessage(result)
+        message
       })
     } catch {
       // 通知を出せない環境でも、画像の枠では知らせている
@@ -202,24 +216,127 @@ if (typeof importScripts === 'function' && !globalThis.ImageViewerImport) import
     if (!image) {
       result = { status: 'fetch-failed' }
     } else {
-      const twitter = request.twitter || null
+      // 投稿者などを読み取れたサイト (Twitter / pixiv) の情報
+      const source = request.source || null
       result = await sendToApp(image, {
         pageUrl: request.pageUrl,
         imageUrl,
         fileName: lib.suggestFileName(imageUrl),
-        site: twitter ? twitter.site : undefined,
-        author: twitter ? twitter.author : undefined,
-        postId: twitter ? twitter.postId : undefined
+        site: source ? source.site : undefined,
+        author: source ? source.author : undefined,
+        postId: source ? source.postId : undefined
       })
     }
 
-    if (tabId !== undefined && tabId >= 0) {
-      api.tabs
-        .sendMessage(tabId, { type: 'result', requestId: request.requestId, status: result.status }, { frameId })
-        .catch(() => undefined)
-    }
+    showResult(tabId, frameId, request.requestId, result.status)
     await notify(result)
     return result
+  }
+
+  /** 取り込みを頼んだ画像に、結果の枠を出してもらう */
+  function showResult(tabId, frameId, requestId, status) {
+    if (tabId === undefined || tabId < 0 || !requestId) return
+    api.tabs.sendMessage(tabId, { type: 'result', requestId, status }, { frameId }).catch(() => undefined)
+  }
+
+  /** 全ページ取り込みで、まだ取り込んでいない枚数 (ツールバーのバッジに出す) */
+  let remainingPages = 0
+  /** 全ページ取り込みは 1 作品ずつ順番に進める (pixiv に一度に取りに行かないため) */
+  let workQueue = Promise.resolve()
+  /** 取り込み中・待ち中の作品 (同じ作品を重ねて頼まれても 1 回にする) */
+  const queuedWorks = new Set()
+
+  function updateBadge() {
+    try {
+      if (remainingPages > 0) {
+        void api.action.setBadgeBackgroundColor({ color: '#3c78d8' })
+        void api.action.setBadgeText({ text: String(remainingPages) })
+      } else {
+        void api.action.setBadgeText({ text: '' })
+      }
+    } catch {
+      // バッジを出せない環境 (Android など) では、最後の通知だけで知らせる
+    }
+  }
+
+  /** 取得に失敗したら 1 回だけ取り直す */
+  async function fetchWithRetry(url, referrer) {
+    const image = await fetchImage(url, referrer)
+    if (image) return image
+    await new Promise((resolve) => setTimeout(resolve, 1000))
+    return fetchImage(url, referrer)
+  }
+
+  /** 1 枚取り込み続けられない状態 (アプリが起動していないなど) になったら、残りはやめる */
+  const ABORT_STATUSES = new Set(['no-token', 'bad-token', 'unreachable', 'no-library'])
+
+  /** pixiv の作品の全ページを、原寸で 1 枚ずつ取り込む */
+  async function importWorkPages(work) {
+    const summary = { imported: 0, duplicate: 0, failed: 0, ugoira: work.ugoira, abort: null }
+    const pageUrl = lib.pixivArtworkUrl(work.illustId)
+    let left = work.pages.length
+    try {
+      for (const imageUrl of work.pages) {
+        const image = await fetchWithRetry(imageUrl, PIXIV_REFERRER)
+        let status = 'fetch-failed'
+        if (image) {
+          const result = await sendToApp(image, {
+            pageUrl,
+            imageUrl,
+            site: 'pixiv',
+            author: work.userId || undefined,
+            postId: work.illustId
+          })
+          status = result.status
+        }
+        left -= 1
+        remainingPages -= 1
+        updateBadge()
+        if (status === 'imported') summary.imported += 1
+        else if (status === 'duplicate') summary.duplicate += 1
+        else if (ABORT_STATUSES.has(status)) {
+          summary.abort = status
+          break
+        } else summary.failed += 1
+      }
+    } finally {
+      remainingPages -= left
+      updateBadge()
+    }
+    return summary
+  }
+
+  function importWork(work, requestId, tabId, frameId) {
+    if (!work || !Array.isArray(work.pages) || work.pages.length === 0) {
+      showResult(tabId, frameId, requestId, 'fetch-failed')
+      return notify({ status: 'work-failed' })
+    }
+    if (queuedWorks.has(work.illustId)) return Promise.resolve()
+    queuedWorks.add(work.illustId)
+    remainingPages += work.pages.length
+    updateBadge()
+    const run = workQueue.then(async () => {
+      try {
+        return await importWorkPages(work)
+      } catch {
+        return { imported: 0, duplicate: 0, failed: work.pages.length, ugoira: false, abort: null }
+      } finally {
+        queuedWorks.delete(work.illustId)
+      }
+    })
+    // 次の作品は、通知を出し終わるのを待たずに始める (通知が返ってこない環境があるため)
+    workQueue = run.then(() => undefined)
+    return run.then(async (summary) => {
+      const status = summary.abort
+        ? summary.abort
+        : summary.failed > 0
+          ? 'failed'
+          : summary.imported > 0
+            ? 'imported'
+            : 'duplicate'
+      showResult(tabId, frameId, requestId, status)
+      await notifyText(status === 'imported' || status === 'duplicate', lib.workResultMessage(summary))
+    })
   }
 
   // 応答は sendResponse で返す (Promise を返す書き方は古い Chrome が受け付けないため)
@@ -227,6 +344,10 @@ if (typeof importScripts === 'function' && !globalThis.ImageViewerImport) import
     let work = null
     if (message && message.type === 'import' && sender.tab) {
       work = importImage(message, sender.tab.id, sender.frameId)
+    } else if (message && message.type === 'importWork' && sender.tab) {
+      // 返事は待たせない (全ページの取り込みは時間がかかるため)
+      void importWork(message.work, message.requestId, sender.tab.id, sender.frameId)
+      work = Promise.resolve({ status: 'queued' })
     } else if (message && message.type === 'ping') {
       work = ping()
     }
@@ -235,30 +356,42 @@ if (typeof importScripts === 'function' && !globalThis.ImageViewerImport) import
     return true
   })
 
-  api.contextMenus.onClicked.addListener((info, tab) => {
+  async function onMenuClicked(info, tab) {
+    const tabId = tab ? tab.id : undefined
+    const frameId = info.frameId ?? 0
+    const hasTab = tabId !== undefined && tabId >= 0
+    if (info.menuItemId === MENU_WORK_ID) {
+      const reply = hasTab
+        ? await api.tabs
+            .sendMessage(tabId, { type: 'workContext', srcUrl: info.srcUrl, linkUrl: info.linkUrl }, { frameId })
+            .catch(() => null)
+        : null
+      await importWork(reply && reply.work, reply && reply.requestId, tabId, frameId)
+      return
+    }
     if (info.menuItemId !== MENU_ID) return
-    void (async () => {
-      const tabId = tab ? tab.id : undefined
-      const frameId = info.frameId ?? 0
-      let request = null
-      // 右クリックした画像の投稿者などはページ側でしか分からないので聞く
-      if (tabId !== undefined && tabId >= 0) {
-        request = await api.tabs
-          .sendMessage(tabId, { type: 'context', srcUrl: info.srcUrl, linkUrl: info.linkUrl }, { frameId })
-          .catch(() => null)
+    let request = null
+    // 右クリックした画像の投稿者などはページ側でしか分からないので聞く
+    if (hasTab) {
+      request = await api.tabs
+        .sendMessage(tabId, { type: 'context', srcUrl: info.srcUrl, linkUrl: info.linkUrl }, { frameId })
+        .catch(() => null)
+    }
+    if (!request || !request.srcUrl) {
+      request = {
+        srcUrl: info.srcUrl,
+        linkUrl: info.linkUrl || '',
+        pageUrl: info.frameUrl || info.pageUrl || '',
+        requestId: null,
+        source: null
       }
-      if (!request || !request.srcUrl) {
-        request = {
-          srcUrl: info.srcUrl,
-          linkUrl: info.linkUrl || '',
-          pageUrl: info.frameUrl || info.pageUrl || '',
-          requestId: null,
-          twitter: null
-        }
-      }
-      await importImage(request, tabId, frameId)
-    })()
-  })
+    }
+    await importImage(request, tabId, frameId)
+  }
+
+  api.contextMenus.onClicked.addListener((info, tab) => void onMenuClicked(info, tab))
+  // e2e テストから右クリックメニューを選んだことにするため (ブラウザのメニューは操作できない)
+  globalThis.ImageViewerImportBackground = { onMenuClicked }
 
   // ツールバーのボタンは設定画面を開く
   api.action.onClicked.addListener(() => void api.runtime.openOptionsPage())

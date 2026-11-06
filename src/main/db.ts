@@ -40,7 +40,7 @@ export interface ImageSourceRow {
   sha256: string
   pageUrl: string | null
   imageUrl: string | null
-  /** 投稿者や投稿 ID を読み取れたサイト ('twitter' など) */
+  /** 投稿者や投稿 ID を読み取れたサイト ('twitter' / 'pixiv') */
   site: string | null
   author: string | null
   postId: string | null

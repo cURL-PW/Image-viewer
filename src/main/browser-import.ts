@@ -17,7 +17,7 @@ const MAX_BASENAME_LENGTH = 120
 
 /**
  * 拡張から届く付帯情報。どれも省略できる。
- * 投稿者などは拡張がページから読み取ったもの (今は Twitter / X のみ)
+ * 投稿者などは拡張がページから読み取ったもの (今は Twitter / X と pixiv)
  */
 export interface ImportMeta {
   pageUrl?: string

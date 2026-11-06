@@ -6,6 +6,20 @@ interface Lib {
   upgradeImageUrl(href: string): string
   candidateUrls(srcUrl: string, linkUrl: string): { url: string; link: boolean }[]
   suggestFileName(url: string): string | undefined
+  parsePixivArtworkPath(href: string, base?: string): string | null
+  parsePixivImageUrl(href: string): { illustId: string; page: number } | null
+  parsePixivWork(
+    illustId: string,
+    info: unknown,
+    pages: unknown
+  ): { illustId: string; userId: string; title: string; ugoira: boolean; pages: string[] } | null
+  workResultMessage(summary: {
+    imported: number
+    duplicate: number
+    failed: number
+    ugoira: boolean
+    abort: string | null
+  }): string
   normalizeOptions(input: unknown): { port: number; token: string; modifier: string }
   bufferToBase64(buffer: ArrayBuffer): string
   base64ToBuffer(text: string): ArrayBuffer
@@ -61,6 +75,63 @@ describe('Twitter (X)', () => {
     expect(lib.upgradeImageUrl(small)).toBe('https://pbs.twimg.com/media/GaBc123?format=jpg&name=orig')
     expect(lib.suggestFileName(small)).toBe('GaBc123')
     expect(lib.upgradeImageUrl('https://example.com/a.jpg')).toBe('https://example.com/a.jpg')
+  })
+})
+
+describe('pixiv', () => {
+  it('作品ページの URL から作品 ID を読む', () => {
+    expect(lib.parsePixivArtworkPath('https://www.pixiv.net/artworks/146233172')).toBe('146233172')
+    expect(lib.parsePixivArtworkPath('https://www.pixiv.net/en/artworks/42#manga')).toBe('42')
+    expect(lib.parsePixivArtworkPath('/artworks/7', 'https://www.pixiv.net/users/1')).toBe('7')
+    expect(
+      lib.parsePixivArtworkPath('https://www.pixiv.net/member_illust.php?mode=medium&illust_id=99')
+    ).toBe('99')
+    expect(lib.parsePixivArtworkPath('https://www.pixiv.net/users/1')).toBeNull()
+    expect(lib.parsePixivArtworkPath('https://example.com/artworks/1')).toBeNull()
+  })
+
+  it('画像の URL から作品 ID とページ番号を読む', () => {
+    const base = 'https://i.pximg.net/img-master/img/2026/11/06/00/00/00'
+    expect(lib.parsePixivImageUrl(`${base}/146233172_p3_master1200.jpg`)).toEqual({
+      illustId: '146233172',
+      page: 3
+    })
+    expect(
+      lib.parsePixivImageUrl('https://i.pximg.net/c/250x250_80_a2/img-master/img/2026/01/01/00/00/00/5_p0_square1200.jpg')
+    ).toEqual({ illustId: '5', page: 0 })
+    expect(lib.parsePixivImageUrl(`${base}/8_master1200.jpg`)).toEqual({ illustId: '8', page: 0 })
+    expect(lib.parsePixivImageUrl('https://i.pximg.net/user-profile/img/2020/a.jpg')).toBeNull()
+    expect(lib.parsePixivImageUrl(`https://example.com/146233172_p3_master1200.jpg`)).toBeNull()
+  })
+
+  it('作品情報から全ページの原寸の URL を取り出す', () => {
+    const info = { error: false, body: { userId: '11', illustTitle: 't', illustType: 1, urls: { original: 'https://i.pximg.net/o/1_p0.png' } } }
+    const pages = {
+      error: false,
+      body: [0, 1, 2].map((n) => ({ urls: { original: `https://i.pximg.net/o/1_p${n}.png` } }))
+    }
+    expect(lib.parsePixivWork('1', info, pages)).toEqual({
+      illustId: '1',
+      userId: '11',
+      title: 't',
+      ugoira: false,
+      pages: ['https://i.pximg.net/o/1_p0.png', 'https://i.pximg.net/o/1_p1.png', 'https://i.pximg.net/o/1_p2.png']
+    })
+    // ページ一覧が読めなければ 1 枚目だけ。うごイラも 1 枚目だけ
+    const ugoira = { error: false, body: { ...info.body, illustType: 2 } }
+    expect(lib.parsePixivWork('1', ugoira, null)).toMatchObject({ ugoira: true, pages: ['https://i.pximg.net/o/1_p0.png'] })
+    expect(lib.parsePixivWork('1', { error: true, body: [] }, pages)).toBeNull()
+  })
+
+  it('全ページ取り込みの結果の文言', () => {
+    const base = { imported: 0, duplicate: 0, failed: 0, ugoira: false, abort: null }
+    expect(lib.workResultMessage({ ...base, imported: 50, duplicate: 3 })).toBe('53 枚取り込みました (取り込み済み 3 枚)')
+    expect(lib.workResultMessage({ ...base, imported: 50, failed: 3 })).toBe('50 枚取り込み、3 枚失敗しました')
+    expect(lib.workResultMessage({ ...base, duplicate: 4 })).toBe('4 枚すべて取り込み済みです')
+    expect(lib.workResultMessage({ ...base, imported: 1, ugoira: true })).toBe(
+      '1 枚取り込みました\nうごイラは 1 枚目のみ取り込みました'
+    )
+    expect(lib.workResultMessage({ ...base, abort: 'unreachable' })).toContain('起動していない')
   })
 })
 

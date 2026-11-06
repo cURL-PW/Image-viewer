@@ -1,6 +1,7 @@
 /*
  * ページ側の処理。修飾キー＋クリックを拾い、取り込みを背景処理に頼む。
  * 右クリックメニューから取り込むときのために、右クリックした画像も覚えておく。
+ * pixiv の作品ページでは、作品の全ページの原寸の URL を pixiv から読んで背景処理に渡す。
  */
 ;(function () {
   'use strict'
@@ -85,8 +86,77 @@
       // Twitter の画像のリンク先は画像ではなく投稿の画面なので、取りに行かない
       linkUrl: twitter ? '' : (anchor && anchor.href) || (fallback && fallback.linkUrl) || '',
       pageUrl: location.href,
-      twitter
+      source: twitter
     }
+  }
+
+  /** pixiv の作品情報を読む。同じ作品を何度も読まないよう覚えておく */
+  const pixivWorks = new Map()
+
+  function loadPixivWork(illustId) {
+    if (!pixivWorks.has(illustId)) {
+      const work = (async () => {
+        // Firefox ではページ側の fetch を使う (ログインの Cookie がページと同じになる)
+        const pageFetch =
+          typeof content !== 'undefined' && content.fetch ? content.fetch.bind(content) : fetch
+        const getJson = async (path) => {
+          const response = await pageFetch(`${location.origin}${path}`, { credentials: 'include' })
+          return response.ok ? response.json() : null
+        }
+        const [info, pages] = await Promise.all([
+          getJson(`/ajax/illust/${illustId}`),
+          getJson(`/ajax/illust/${illustId}/pages`)
+        ])
+        return lib.parsePixivWork(illustId, info, pages)
+      })().catch(() => null)
+      pixivWorks.set(illustId, work)
+      // 失敗したものは次に読み直せるように、少ししたら忘れる
+      void work.then((value) => {
+        setTimeout(() => pixivWorks.delete(illustId), value ? 10 * 60_000 : 0)
+      })
+    }
+    return pixivWorks.get(illustId)
+  }
+
+  /**
+   * pixiv の画像なら、どの作品の何ページ目か。画像の URL (…/146233172_p3_master1200.jpg) か、
+   * 画像を囲むリンク (/artworks/146233172) から読む
+   */
+  function pixivTarget(img, fallback) {
+    if (!lib.isPixivHost(location.hostname)) return null
+    const src = (img && (img.currentSrc || img.src)) || (fallback && fallback.srcUrl) || ''
+    const fromImage = lib.parsePixivImageUrl(src)
+    if (fromImage) return fromImage
+    const anchor = img && img.closest('a[href]')
+    const fromLink = anchor && lib.parsePixivArtworkPath(anchor.getAttribute('href'), location.href)
+    return fromLink ? { illustId: fromLink, page: 0 } : null
+  }
+
+  /** 開いている作品ページの画像か (修飾キー＋クリックで全ページを取り込む対象) */
+  function isCurrentWork(target) {
+    return Boolean(target && target.illustId === lib.parsePixivArtworkPath(location.href))
+  }
+
+  /**
+   * describe に加えて、pixiv の画像なら原寸の URL と投稿者・作品 ID を付ける
+   * (表示中の画像は縮小版なので、原寸をリンク先として先に試す)
+   */
+  async function describeFull(img, fallback) {
+    const base = describe(img, fallback)
+    const target = pixivTarget(img, fallback)
+    if (!target) return base
+    const work = await loadPixivWork(target.illustId)
+    if (!work) return base
+    return {
+      ...base,
+      linkUrl: work.pages[target.page] || work.pages[0],
+      pageUrl: lib.pixivArtworkUrl(work.illustId),
+      source: pixivSource(work)
+    }
+  }
+
+  function pixivSource(work) {
+    return { site: 'pixiv', author: work.userId, postId: work.illustId }
   }
 
   /** 枠を付ける前の outline と、元に戻すタイマー。枠が重なっても元の見た目に戻すため */
@@ -128,7 +198,19 @@
     event.preventDefault()
     event.stopImmediatePropagation()
     if (event.type !== 'click') return
-    void api.runtime.sendMessage({ type: 'import', requestId: remember(img), ...describe(img) })
+    const requestId = remember(img)
+    const target = pixivTarget(img)
+    void (async () => {
+      // pixiv の作品ページでは、その作品の全ページを取り込む
+      if (isCurrentWork(target)) {
+        const work = await loadPixivWork(target.illustId)
+        if (work) {
+          await api.runtime.sendMessage({ type: 'importWork', requestId, work })
+          return
+        }
+      }
+      await api.runtime.sendMessage({ type: 'import', requestId, ...(await describeFull(img)) })
+    })()
   }
 
   function matches(event) {
@@ -144,8 +226,21 @@
     if (!message || typeof message !== 'object') return false
     if (message.type === 'context') {
       // 右クリックメニューから: 覚えておいた画像の情報を返す
-      sendResponse({ requestId: remember(contextTarget), ...describe(contextTarget, message) })
-      return false
+      const img = contextTarget
+      void describeFull(img, message).then((info) => sendResponse({ requestId: remember(img), ...info }))
+      return true
+    }
+    if (message.type === 'workContext') {
+      // 右クリックメニューの「この作品の全ページを取り込む」: 右クリックした画像の作品を読む
+      const img = contextTarget
+      const target = pixivTarget(img, message)
+      const illustId = target ? target.illustId : lib.parsePixivArtworkPath(location.href)
+      if (!illustId) {
+        sendResponse({ requestId: null, work: null })
+        return false
+      }
+      void loadPixivWork(illustId).then((work) => sendResponse({ requestId: remember(img), work }))
+      return true
     }
     if (message.type === 'result') {
       const img = pending.get(message.requestId)

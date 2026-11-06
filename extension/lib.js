@@ -81,6 +81,94 @@
     }
   }
 
+  /** pixiv の作品ページか (日本語版・英語版などの言語付きの URL も) */
+  function isPixivHost(hostname) {
+    const host = String(hostname).toLowerCase()
+    return host === 'www.pixiv.net' || host === 'pixiv.net'
+  }
+
+  /** 作品ページの URL から作品 ID を読む (/artworks/123, /en/artworks/123, 古い member_illust.php) */
+  function parsePixivArtworkPath(href, base) {
+    try {
+      const url = new URL(href, base)
+      if (!isPixivHost(url.hostname)) return null
+      const match = url.pathname.match(/^\/(?:[a-z]{2}(?:-[a-z]+)?\/)?artworks\/(\d+)/i)
+      if (match) return match[1]
+      if (/\/member_illust\.php$/.test(url.pathname)) {
+        const id = url.searchParams.get('illust_id')
+        if (id && /^\d+$/.test(id)) return id
+      }
+      return null
+    } catch {
+      return null
+    }
+  }
+
+  /**
+   * pixiv の画像 (i.pximg.net) の URL から作品 ID とページ番号を読む。
+   * 例: .../img-master/img/2026/11/06/00/00/00/146233172_p3_master1200.jpg → { illustId: '146233172', page: 3 }
+   * うごイラ (146233172_master1200.jpg など) はページ番号 0 とする
+   */
+  function parsePixivImageUrl(href) {
+    try {
+      const url = new URL(href)
+      if (!/(^|\.)pximg\.net$/i.test(url.hostname)) return null
+      const name = url.pathname.split('/').pop() || ''
+      const match = name.match(/^(\d+)(?:_p(\d+))?(?:_|\.)/)
+      if (!match) return null
+      return { illustId: match[1], page: match[2] ? Number(match[2]) : 0 }
+    } catch {
+      return null
+    }
+  }
+
+  /**
+   * pixiv の作品情報 (/ajax/illust/{id} と /ajax/illust/{id}/pages の応答) から、
+   * 取り込みに使うものを取り出す。読めなければ null
+   */
+  function parsePixivWork(illustId, info, pages) {
+    const body = info && !info.error && info.body ? info.body : null
+    if (!body) return null
+    const urls = []
+    if (pages && !pages.error && Array.isArray(pages.body)) {
+      for (const page of pages.body) {
+        const original = page && page.urls && page.urls.original
+        if (typeof original === 'string' && /^https?:/i.test(original)) urls.push(original)
+      }
+    }
+    // ページ一覧が取れなければ、作品情報にある 1 枚目の原寸だけでも取る
+    if (urls.length === 0 && body.urls && typeof body.urls.original === 'string') urls.push(body.urls.original)
+    if (urls.length === 0) return null
+    return {
+      illustId: String(illustId),
+      userId: body.userId != null ? String(body.userId) : '',
+      title: typeof body.illustTitle === 'string' ? body.illustTitle : '',
+      // 0: イラスト, 1: マンガ, 2: うごイラ
+      ugoira: Number(body.illustType) === 2,
+      pages: urls
+    }
+  }
+
+  function pixivArtworkUrl(illustId) {
+    return `https://www.pixiv.net/artworks/${illustId}`
+  }
+
+  /** 全ページ取り込みが終わったときの通知の文言 */
+  function workResultMessage(summary) {
+    if (summary.abort) return resultMessage({ status: summary.abort })
+    const ok = summary.imported + summary.duplicate
+    let text
+    if (summary.failed > 0) {
+      text = `${ok} 枚取り込み、${summary.failed} 枚失敗しました`
+    } else if (summary.duplicate > 0 && summary.imported === 0) {
+      text = `${ok} 枚すべて取り込み済みです`
+    } else {
+      text = `${ok} 枚取り込みました${summary.duplicate > 0 ? ` (取り込み済み ${summary.duplicate} 枚)` : ''}`
+    }
+    if (summary.ugoira) text += '\nうごイラは 1 枚目のみ取り込みました'
+    return text
+  }
+
   /**
    * 原寸の画像の URL にする。今は Twitter (X) の画像だけ。
    * pbs.twimg.com/media/XXX?format=jpg&name=small → name=orig
@@ -148,6 +236,8 @@
         return 'Image Viewer が起動していないか、ブラウザからの取り込みがオフになっています'
       case 'fetch-failed':
         return '画像を取得できませんでした'
+      case 'work-failed':
+        return 'pixiv の作品の情報を読めませんでした。ページを再読み込みしてから試してください'
       default:
         return '取り込みに失敗しました'
     }
@@ -179,6 +269,12 @@
     matchesModifier,
     isTwitterHost,
     parseTweetPath,
+    isPixivHost,
+    parsePixivArtworkPath,
+    parsePixivImageUrl,
+    parsePixivWork,
+    pixivArtworkUrl,
+    workResultMessage,
     upgradeImageUrl,
     isFetchable,
     candidateUrls,
