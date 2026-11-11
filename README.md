@@ -13,8 +13,9 @@
 | Windows | `Image-Viewer-Setup-*.exe` (インストーラ) / `Image-Viewer-*-win.zip` (展開して使う版) |
 | macOS | `Image-Viewer-*.dmg` |
 | Linux | `Image-Viewer-*.AppImage` |
+| ブラウザ拡張 | `image-viewer-extension-*.zip` (Chrome / Edge) / `image-viewer-extension-*.xpi` (Firefox、未署名) |
 
-配布物にはコード署名をしていません。初回起動時に Windows の SmartScreen (「Windows によって PC が保護されました」) や macOS の Gatekeeper の警告が出ることがあります。Windows では「詳細情報」→「実行」で起動できます。
+配布物にはコード署名をしていません。初回起動時に Windows の SmartScreen (「Windows によって PC が保護されました」) や macOS の Gatekeeper の警告が出ることがあります。Windows では「詳細情報」→「実行」で起動できます。拡張の入れ方は [extension/README.md](extension/README.md) を見てください。
 
 ## 主な機能
 
