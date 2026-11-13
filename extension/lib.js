@@ -139,13 +139,111 @@
     // ページ一覧が取れなければ、作品情報にある 1 枚目の原寸だけでも取る
     if (urls.length === 0 && body.urls && typeof body.urls.original === 'string') urls.push(body.urls.original)
     if (urls.length === 0) return null
+    const userId = body.userId != null ? String(body.userId) : ''
     return {
+      site: 'pixiv',
       illustId: String(illustId),
-      userId: body.userId != null ? String(body.userId) : '',
+      userId,
       title: typeof body.illustTitle === 'string' ? body.illustTitle : '',
       // 0: イラスト, 1: マンガ, 2: うごイラ
       ugoira: Number(body.illustType) === 2,
-      pages: urls
+      pages: urls,
+      // 以下は Twitter の投稿と共通の項目 (背景処理はこちらを見る)
+      postId: String(illustId),
+      author: userId,
+      pageUrl: pixivArtworkUrl(illustId),
+      referrer: 'https://www.pixiv.net/',
+      skippedVideos: 0
+    }
+  }
+
+  /**
+   * X の埋め込み用の公開情報 (ログイン不要) の URL。公式の埋め込みと同じく、投稿 ID から token を計算して付ける。
+   * syndicationOrigin は e2e テストでテスト用のサーバーへ向けるために変えられるようにしてある
+   */
+  const twitterConfig = { syndicationOrigin: 'https://cdn.syndication.twimg.com' }
+
+  function tweetSyndicationUrl(postId) {
+    const token = ((Number(postId) / 1e15) * Math.PI).toString(36).replace(/(0+|\.)/g, '')
+    return `${twitterConfig.syndicationOrigin}/tweet-result?id=${postId}&lang=ja&token=${token}`
+  }
+
+  /** pbs.twimg.com の画像の「メディア ID」。画像でなければ null */
+  function twitterMediaId(href) {
+    try {
+      const url = new URL(href)
+      if (url.hostname !== 'pbs.twimg.com' || !url.pathname.startsWith('/media/')) return null
+      return url.pathname.slice('/media/'.length).replace(/\.[A-Za-z0-9]+$/, '') || null
+    } catch {
+      return null
+    }
+  }
+
+  /**
+   * X の画像を原寸の URL にする。.../media/XXX.jpg (埋め込み情報の形) と
+   * .../media/XXX?format=jpg&name=small (画面の形) のどちらも .../media/XXX?format=jpg&name=orig にする
+   */
+  function twitterOriginalUrl(href) {
+    try {
+      const url = new URL(href)
+      const id = twitterMediaId(href)
+      if (!id) return null
+      const ext = url.pathname.match(/\.([A-Za-z0-9]+)$/)
+      const format = url.searchParams.get('format') || (ext ? ext[1].toLowerCase() : 'jpg')
+      return `${url.protocol}//${url.host}/media/${id}?format=${format}&name=orig`
+    } catch {
+      return null
+    }
+  }
+
+  /**
+   * 埋め込み用の公開情報の応答から、画像の URL と飛ばす動画の数を読む。読めなければ null
+   * (鍵アカウント・削除済み・センシティブ指定などは TweetTombstone が返る)
+   */
+  function parseTweetMedia(json) {
+    if (!json || typeof json !== 'object' || !Array.isArray(json.mediaDetails)) return null
+    const photos = []
+    let videos = 0
+    for (const media of json.mediaDetails) {
+      if (!media || typeof media !== 'object') continue
+      if (media.type === 'photo') {
+        const url = twitterOriginalUrl(media.media_url_https || media.media_url || '')
+        if (url) photos.push(url)
+      } else if (media.type === 'video' || media.type === 'animated_gif') {
+        videos += 1
+      }
+    }
+    return { photos, videos }
+  }
+
+  /**
+   * X の投稿の画像をまとめて取り込むための情報を作る。埋め込み情報の画像を投稿内の順に並べ、
+   * 埋め込み情報に無く画面には出ている画像があれば後ろに足す。1 枚も無ければ null
+   */
+  function buildTweetWork(tweet, media, domUrls) {
+    if (!tweet || !tweet.postId) return null
+    const pages = []
+    const seen = new Set()
+    const add = (href) => {
+      const url = twitterOriginalUrl(href)
+      const id = url && twitterMediaId(url)
+      if (!id || seen.has(id)) return
+      seen.add(id)
+      pages.push(url)
+    }
+    for (const url of (media && media.photos) || []) add(url)
+    for (const url of domUrls || []) add(url)
+    if (pages.length === 0) return null
+    const author = tweet.author || ''
+    return {
+      site: 'twitter',
+      postId: String(tweet.postId),
+      author,
+      pageUrl: `https://x.com/${author || 'i'}/status/${tweet.postId}`,
+      referrer: 'https://x.com/',
+      pages,
+      ugoira: false,
+      skippedVideos: (media && media.videos) || 0
     }
   }
 
@@ -166,6 +264,7 @@
       text = `${ok} 枚取り込みました${summary.duplicate > 0 ? ` (取り込み済み ${summary.duplicate} 枚)` : ''}`
     }
     if (summary.ugoira) text += '\nうごイラは 1 枚目のみ取り込みました'
+    if (summary.skippedVideos > 0) text += `\n動画・GIF ${summary.skippedVideos} 件は飛ばしました`
     return text
   }
 
@@ -238,6 +337,8 @@
         return '画像を取得できませんでした'
       case 'work-failed':
         return 'pixiv の作品の情報を読めませんでした。ページを再読み込みしてから試してください'
+      case 'tweet-failed':
+        return 'X の投稿の画像を見つけられませんでした。ページを再読み込みしてから試してください'
       default:
         return '取り込みに失敗しました'
     }
@@ -274,6 +375,12 @@
     parsePixivImageUrl,
     parsePixivWork,
     pixivArtworkUrl,
+    twitterConfig,
+    tweetSyndicationUrl,
+    twitterMediaId,
+    twitterOriginalUrl,
+    parseTweetMedia,
+    buildTweetWork,
     workResultMessage,
     upgradeImageUrl,
     isFetchable,

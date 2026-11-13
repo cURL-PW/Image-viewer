@@ -10,8 +10,9 @@ if (typeof importScripts === 'function' && !globalThis.ImageViewerImport) import
   const lib = globalThis.ImageViewerImport
   const MENU_ID = 'image-viewer-import'
   const MENU_WORK_ID = 'image-viewer-import-pixiv-work'
-  /** pixiv の原寸画像 (i.pximg.net) は、pixiv のページからの Referer でないと断られる */
-  const PIXIV_REFERRER = 'https://www.pixiv.net/'
+  const MENU_TWEET_ID = 'image-viewer-import-tweet'
+  /** X の投稿ページ・タイムライン (x.com / twitter.com) */
+  const TWITTER_PATTERNS = ['*://x.com/*', '*://*.x.com/*', '*://twitter.com/*', '*://*.twitter.com/*']
   /**
    * ページと同じ Referer を付けるための一時的な規則の ID の範囲。
    * 続けて取り込むと取りに行く処理が重なるので、1 枚ごとに別の ID を使う
@@ -53,6 +54,13 @@ if (typeof importScripts === 'function' && !globalThis.ImageViewerImport) import
         title: 'この作品の全ページを Image Viewer に取り込む',
         contexts: ['image'],
         documentUrlPatterns: ['*://www.pixiv.net/artworks/*', '*://www.pixiv.net/*/artworks/*']
+      })
+      // X でだけ出す
+      api.contextMenus.create({
+        id: MENU_TWEET_ID,
+        title: 'この投稿の画像をすべて Image Viewer に取り込む',
+        contexts: ['image'],
+        documentUrlPatterns: TWITTER_PATTERNS
       })
     })
   }
@@ -270,22 +278,29 @@ if (typeof importScripts === 'function' && !globalThis.ImageViewerImport) import
   /** 1 枚取り込み続けられない状態 (アプリが起動していないなど) になったら、残りはやめる */
   const ABORT_STATUSES = new Set(['no-token', 'bad-token', 'unreachable', 'no-library'])
 
-  /** pixiv の作品の全ページを、原寸で 1 枚ずつ取り込む */
+  /** pixiv の作品の全ページ・X の投稿の全画像を、原寸で 1 枚ずつ取り込む */
   async function importWorkPages(work) {
-    const summary = { imported: 0, duplicate: 0, failed: 0, ugoira: work.ugoira, abort: null }
-    const pageUrl = lib.pixivArtworkUrl(work.illustId)
+    const summary = {
+      imported: 0,
+      duplicate: 0,
+      failed: 0,
+      ugoira: Boolean(work.ugoira),
+      skippedVideos: work.skippedVideos || 0,
+      abort: null
+    }
     let left = work.pages.length
     try {
       for (const imageUrl of work.pages) {
-        const image = await fetchWithRetry(imageUrl, PIXIV_REFERRER)
+        const image = await fetchWithRetry(imageUrl, work.referrer)
         let status = 'fetch-failed'
         if (image) {
           const result = await sendToApp(image, {
-            pageUrl,
+            pageUrl: work.pageUrl,
             imageUrl,
-            site: 'pixiv',
-            author: work.userId || undefined,
-            postId: work.illustId
+            fileName: lib.suggestFileName(imageUrl),
+            site: work.site,
+            author: work.author || undefined,
+            postId: work.postId
           })
           status = result.status
         }
@@ -306,13 +321,14 @@ if (typeof importScripts === 'function' && !globalThis.ImageViewerImport) import
     return summary
   }
 
-  function importWork(work, requestId, tabId, frameId) {
+  function importWork(work, requestId, tabId, frameId, failure = 'work-failed') {
     if (!work || !Array.isArray(work.pages) || work.pages.length === 0) {
       showResult(tabId, frameId, requestId, 'fetch-failed')
-      return notify({ status: 'work-failed' })
+      return notify({ status: failure })
     }
-    if (queuedWorks.has(work.illustId)) return Promise.resolve()
-    queuedWorks.add(work.illustId)
+    const key = `${work.site}:${work.postId}`
+    if (queuedWorks.has(key)) return Promise.resolve()
+    queuedWorks.add(key)
     remainingPages += work.pages.length
     updateBadge()
     const run = workQueue.then(async () => {
@@ -321,7 +337,7 @@ if (typeof importScripts === 'function' && !globalThis.ImageViewerImport) import
       } catch {
         return { imported: 0, duplicate: 0, failed: work.pages.length, ugoira: false, abort: null }
       } finally {
-        queuedWorks.delete(work.illustId)
+        queuedWorks.delete(key)
       }
     })
     // 次の作品は、通知を出し終わるのを待たずに始める (通知が返ってこない環境があるため)
@@ -339,6 +355,35 @@ if (typeof importScripts === 'function' && !globalThis.ImageViewerImport) import
     })
   }
 
+  /**
+   * X の投稿の画像を一覧にする。画面に出ている画像だけでは揃わない (20 枚の投稿など) ので、
+   * 埋め込み用の公開情報から全画像を読み、読めなければ画面に出ている画像 (domUrls) だけにする
+   */
+  async function loadTweetWork(tweet, domUrls) {
+    let media = null
+    if (tweet && tweet.postId) {
+      const controller = new AbortController()
+      const timer = setTimeout(() => controller.abort(), 15_000)
+      try {
+        const response = await fetch(lib.tweetSyndicationUrl(tweet.postId), {
+          credentials: 'omit',
+          signal: controller.signal
+        })
+        if (response.ok) media = lib.parseTweetMedia(await response.json())
+      } catch {
+        // 画面に出ている画像だけで進める
+      } finally {
+        clearTimeout(timer)
+      }
+    }
+    return lib.buildTweetWork(tweet, media, domUrls)
+  }
+
+  async function importTweet(message, tabId, frameId) {
+    const work = await loadTweetWork(message.tweet, message.domUrls)
+    return importWork(work, message.requestId, tabId, frameId, 'tweet-failed')
+  }
+
   // 応答は sendResponse で返す (Promise を返す書き方は古い Chrome が受け付けないため)
   api.runtime.onMessage.addListener((message, sender, sendResponse) => {
     let work = null
@@ -347,6 +392,9 @@ if (typeof importScripts === 'function' && !globalThis.ImageViewerImport) import
     } else if (message && message.type === 'importWork' && sender.tab) {
       // 返事は待たせない (全ページの取り込みは時間がかかるため)
       void importWork(message.work, message.requestId, sender.tab.id, sender.frameId)
+      work = Promise.resolve({ status: 'queued' })
+    } else if (message && message.type === 'importTweet' && sender.tab) {
+      void importTweet(message, sender.tab.id, sender.frameId)
       work = Promise.resolve({ status: 'queued' })
     } else if (message && message.type === 'ping') {
       work = ping()
@@ -367,6 +415,15 @@ if (typeof importScripts === 'function' && !globalThis.ImageViewerImport) import
             .catch(() => null)
         : null
       await importWork(reply && reply.work, reply && reply.requestId, tabId, frameId)
+      return
+    }
+    if (info.menuItemId === MENU_TWEET_ID) {
+      const reply = hasTab
+        ? await api.tabs
+            .sendMessage(tabId, { type: 'tweetContext', srcUrl: info.srcUrl }, { frameId })
+            .catch(() => null)
+        : null
+      await importTweet(reply || {}, tabId, frameId)
       return
     }
     if (info.menuItemId !== MENU_ID) return

@@ -46,6 +46,49 @@ async function solid(width: number, height: number, color: string): Promise<Buff
 
 const PIXIV_IMG = 'http://i.pximg.net'
 
+/**
+ * 模した X の投稿。20 枚の画像 (と動画 1 本) の投稿と、画像 2 枚の投稿。
+ * 画面には先頭の 4 枚しか出ていない (残りは X の埋め込み用の公開情報からしか分からない) 作りにする
+ */
+const TWEETS: Record<string, { author: string; photos: string[]; video: boolean }> = {
+  '1988000000000000001': { author: 'artist', photos: Array.from({ length: 20 }, (_, n) => `Tw${n + 1}`), video: true },
+  '1988000000000000002': { author: 'friend', photos: ['Fr1', 'Fr2'], video: false }
+}
+
+function tweetArticle(postId: string, shown: number): string {
+  const tweet = TWEETS[postId]
+  const base = `/${tweet.author}/status/${postId}`
+  return `<article data-post="${postId}">
+      <a href="${base}"><time datetime="2026-11-13">11月13日</time></a>
+      <div style="display:grid;grid-template-columns:repeat(2,140px);gap:2px">
+        ${tweet.photos
+          .slice(0, shown)
+          .map(
+            (id, n) => `<a href="${base}/photo/${n + 1}" style="position:relative;display:block;height:100px">
+          <img id="${id}" src="http://pbs.twimg.com/media/${id}?format=png&name=small" style="width:100%;height:100%;object-fit:cover">
+          ${n === shown - 1 && tweet.photos.length > shown ? `<span style="position:absolute;inset:0;display:grid;place-items:center;background:#0008;color:#fff;font:bold 24px sans-serif">+${tweet.photos.length - shown}</span>` : ''}
+        </a>`
+          )
+          .join('')}
+      </div>
+    </article>`
+}
+
+/** X の埋め込み用の公開情報 (cdn.syndication.twimg.com/tweet-result) を模して返す */
+function tweetResult(id: string | null): unknown {
+  const tweet = id ? TWEETS[id] : undefined
+  if (!tweet) return null
+  return {
+    __typename: 'Tweet',
+    id_str: id,
+    user: { screen_name: tweet.author },
+    mediaDetails: [
+      ...tweet.photos.map((name) => ({ type: 'photo', media_url_https: `http://pbs.twimg.com/media/${name}.png` /* テスト用のサーバーは http */ })),
+      ...(tweet.video ? [{ type: 'video', media_url_https: 'https://pbs.twimg.com/ext_tw_video_thumb/1/pu/img/v.jpg' }] : [])
+    ]
+  }
+}
+
 const PAGES: Record<string, string> = {
   // サムネイルが原寸画像へのリンクになっている、よくある作りのページ
   '/gallery': `<!doctype html><meta charset="utf-8"><title>gallery</title>
@@ -62,6 +105,11 @@ const PAGES: Record<string, string> = {
         </div>
       </a>
     </article>`,
+  // X のタイムラインを模したもの。20 枚の投稿は 4 枚だけ出て「+16」と重なる
+  '/home': `<!doctype html><meta charset="utf-8"><title>X</title>
+    <body style="font-family:sans-serif;width:300px">
+    ${tweetArticle('1988000000000000001', 4)}
+    ${tweetArticle('1988000000000000002', 2)}`,
   // 直リンク禁止 (Referer を見る) の画像を並べたページ。続けて素早く取り込む確認用
   '/burst': `<!doctype html><meta charset="utf-8"><title>burst</title>
     ${[1, 2, 3, 4, 5, 6]
@@ -117,6 +165,19 @@ function startSite(): Promise<void> {
     if (url.pathname in PAGES) {
       response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
       response.end(PAGES[url.pathname])
+      return
+    }
+    if (url.pathname === '/tweet-result') {
+      const body = tweetResult(url.searchParams.get('id'))
+      response.writeHead(body ? 200 : 404, { 'Content-Type': 'application/json' })
+      response.end(JSON.stringify(body ?? {}))
+      return
+    }
+    const media = url.pathname.match(/^\/media\/((?:Tw|Fr)\d+)$/)
+    if (media) {
+      const image = images[`x-${media[1]}-${url.searchParams.get('name')}`]
+      response.writeHead(image ? 200 : 404, { 'Content-Type': 'image/png' })
+      response.end(image)
       return
     }
     if (url.pathname.startsWith('/ajax/illust/')) {
@@ -192,6 +253,13 @@ test.beforeAll(async () => {
       images[`pixiv-${id}_p${n}.png`] = await solid(1000 + n, 800, id === '999' ? '#cc8844' : '#8844cc')
       images[`pixiv-${id}_p${n}_master1200.jpg`] = await solid(120, 90, '#8844cc')
       images[`pixiv-${id}_p${n}_square1200.jpg`] = await solid(80, 80, '#8844cc')
+    }
+  }
+  for (const tweet of Object.values(TWEETS)) {
+    for (const [n, name] of tweet.photos.entries()) {
+      // 原寸は 1 枚ごとに大きさを変えて、取り違えに気づけるようにする
+      images[`x-${name}-orig`] = await solid(900 + n, 700, name.startsWith('Tw') ? '#1d9bf0' : '#f91880')
+      images[`x-${name}-small`] = await solid(140, 100, name.startsWith('Tw') ? '#1d9bf0' : '#f91880')
     }
   }
   await startSite()
@@ -275,7 +343,7 @@ test('拡張の設定画面で合言葉を貼ると、接続を確かめられ�
       `--disable-extensions-except=${EXTENSION}`,
       `--load-extension=${EXTENSION}`,
       // x.com と pbs.twimg.com をテスト用のサーバーへ向ける
-      `--host-resolver-rules=MAP x.com 127.0.0.1:${sitePort}, MAP pbs.twimg.com 127.0.0.1:${sitePort}, MAP gallery.test 127.0.0.1:${sitePort}, MAP cdn.test 127.0.0.1:${sitePort}, MAP www.pixiv.net 127.0.0.1:${sitePort}, MAP i.pximg.net 127.0.0.1:${sitePort}`
+      `--host-resolver-rules=MAP x.com 127.0.0.1:${sitePort}, MAP pbs.twimg.com 127.0.0.1:${sitePort}, MAP gallery.test 127.0.0.1:${sitePort}, MAP cdn.test 127.0.0.1:${sitePort}, MAP www.pixiv.net 127.0.0.1:${sitePort}, MAP i.pximg.net 127.0.0.1:${sitePort}, MAP cdn.syndication.twimg.com 127.0.0.1:${sitePort}`
     ]
   })
   worker = browser.serviceWorkers()[0] ?? (await browser.waitForEvent('serviceworker'))
@@ -507,5 +575,63 @@ test('pixiv: 右クリックの「この作品の全ページを取り込む」�
   await expect.poll(() => pixivFiles('999_'), { timeout: 15_000 }).toEqual(['999_p0.png', '999_p1.png'])
   // 先に取り込んだ作品はそのまま (重複して保存しない)
   expect(await pixivFiles('146233172_')).toHaveLength(5)
+  await page.close()
+})
+
+/** ライブラリ直下にある X の画像 */
+async function tweetFiles(prefix: string): Promise<string[]> {
+  return (await fs.readdir(fixture.root))
+    .filter((name) => new RegExp(`^${prefix}\\d+\\.png$`).test(name))
+    .sort((a, b) => Number(a.match(/\d+/)![0]) - Number(b.match(/\d+/)![0]))
+}
+
+/** 埋め込み用の公開情報を、テスト用のサーバー (http) へ向ける */
+async function useTestSyndication(): Promise<void> {
+  await worker.evaluate(() => {
+    const lib = (globalThis as unknown as { ImageViewerImport: { twitterConfig: { syndicationOrigin: string } } })
+      .ImageViewerImport
+    lib.twitterConfig.syndicationOrigin = 'http://cdn.syndication.twimg.com'
+  })
+}
+
+test('X: 20 枚の投稿の画像を Alt+Shift+クリックすると、画面に出ていない分も含めて全部原寸で取り込む', async () => {
+  await useTestSyndication()
+  const page = await browser.newPage()
+  await page.setViewportSize({ width: 340, height: 420 })
+  await page.goto('http://x.com/home')
+  await page.locator('#Tw2').click({ modifiers: ['Alt', 'Shift'] })
+
+  await expect.poll(badge, { intervals: [50] }).toMatch(/^\d+$/)
+  const all = Array.from({ length: 20 }, (_, n) => `Tw${n + 1}.png`)
+  await expect.poll(() => tweetFiles('Tw'), { timeout: 30_000 }).toEqual(all)
+  for (let n = 0; n < 20; n++) expect(await width(`Tw${n + 1}.png`)).toBe(900 + n)
+  await expect.poll(badge).toBe('')
+  // 取り込み終わると、クリックした画像に緑の枠が出る
+  await expect
+    .poll(() => page.locator('#Tw2').evaluate((img: HTMLImageElement) => img.style.outline), { intervals: [50] })
+    .toBe('rgb(60, 207, 110) solid 3px')
+  await page.screenshot({ path: `${SHOTS}/x-multi-import-page.png` })
+  // 同じタイムラインの別の投稿の画像は取り込んでいない
+  expect(await tweetFiles('Fr')).toEqual([])
+  await page.close()
+
+  await window.locator('.notice__action', { hasText: '表示' }).click()
+  await expect(window.locator('.viewer__name')).toHaveText(/^Tw\d+\.png$/)
+  const source = window.getByTestId('image-source')
+  await expect(source).toContainText('x.com/artist/status/1988000000000000001')
+  await expect(source).toContainText('投稿者 @artist')
+  await expect(source).toContainText('投稿 ID 1988000000000000001')
+  await window.screenshot({ path: `${SHOTS}/x-multi-import-source.png` })
+  await window.keyboard.press('Escape')
+})
+
+test('X: 右クリックの「この投稿の画像をすべて取り込む」は、右クリックした画像の投稿を取り込む', async () => {
+  await useTestSyndication()
+  const page = await browser.newPage()
+  await page.goto('http://x.com/home')
+  await chooseMenu(page, '#Fr2', 'image-viewer-import-tweet')
+  await expect.poll(() => tweetFiles('Fr'), { timeout: 15_000 }).toEqual(['Fr1.png', 'Fr2.png'])
+  // 先に取り込んだ投稿はそのまま (重複して保存しない)
+  expect(await tweetFiles('Tw')).toHaveLength(20)
   await page.close()
 })
