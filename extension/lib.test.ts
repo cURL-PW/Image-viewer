@@ -13,11 +13,20 @@ interface Lib {
     info: unknown,
     pages: unknown
   ): { illustId: string; userId: string; title: string; ugoira: boolean; pages: string[] } | null
+  tweetSyndicationUrl(postId: string): string
+  twitterOriginalUrl(href: string): string | null
+  parseTweetMedia(json: unknown): { photos: string[]; videos: number } | null
+  buildTweetWork(
+    tweet: { author: string; postId: string },
+    media: { photos: string[]; videos: number } | null,
+    domUrls: string[]
+  ): { site: string; postId: string; author: string; pageUrl: string; pages: string[]; skippedVideos: number } | null
   workResultMessage(summary: {
     imported: number
     duplicate: number
     failed: number
     ugoira: boolean
+    skippedVideos?: number
     abort: string | null
   }): string
   normalizeOptions(input: unknown): { port: number; token: string; modifier: string }
@@ -78,6 +87,64 @@ describe('Twitter (X)', () => {
   })
 })
 
+describe('X の投稿の画像をまとめて取り込む', () => {
+  it('埋め込み用の公開情報の URL に token を付ける', () => {
+    const url = new URL(lib.tweetSyndicationUrl('1880000000000000000'))
+    expect(url.origin + url.pathname).toBe('https://cdn.syndication.twimg.com/tweet-result')
+    expect(url.searchParams.get('id')).toBe('1880000000000000000')
+    expect(url.searchParams.get('token')).toMatch(/^[0-9a-z]+$/)
+  })
+
+  it('画像の URL はどちらの形でも原寸にする', () => {
+    expect(lib.twitterOriginalUrl('https://pbs.twimg.com/media/AbC.png')).toBe(
+      'https://pbs.twimg.com/media/AbC?format=png&name=orig'
+    )
+    expect(lib.twitterOriginalUrl('https://pbs.twimg.com/media/AbC?format=jpg&name=small')).toBe(
+      'https://pbs.twimg.com/media/AbC?format=jpg&name=orig'
+    )
+    expect(lib.twitterOriginalUrl('https://pbs.twimg.com/profile_images/1/a.jpg')).toBeNull()
+  })
+
+  it('20 枚の画像を順番どおりに読み、動画・GIF は数えて飛ばす', () => {
+    const mediaDetails = [
+      ...Array.from({ length: 20 }, (_, n) => ({ type: 'photo', media_url_https: `https://pbs.twimg.com/media/P${n}.jpg` })),
+      { type: 'video', media_url_https: 'https://pbs.twimg.com/ext_tw_video_thumb/1/pu/img/v.jpg' },
+      { type: 'animated_gif', media_url_https: 'https://pbs.twimg.com/tweet_video_thumb/g.jpg' }
+    ]
+    const media = lib.parseTweetMedia({ __typename: 'Tweet', mediaDetails })!
+    expect(media.photos).toHaveLength(20)
+    expect(media.photos[19]).toBe('https://pbs.twimg.com/media/P19?format=jpg&name=orig')
+    expect(media.videos).toBe(2)
+    expect(lib.parseTweetMedia({ __typename: 'TweetTombstone' })).toBeNull()
+  })
+
+  it('埋め込み情報の順に並べ、画面にだけある画像は後ろに足す。同じ画像は 1 回', () => {
+    const tweet = { author: 'someone', postId: '42' }
+    const media = { photos: ['https://pbs.twimg.com/media/A?format=jpg&name=orig'], videos: 1 }
+    const dom = [
+      'https://pbs.twimg.com/media/A?format=jpg&name=small',
+      'https://pbs.twimg.com/media/B?format=png&name=360x360'
+    ]
+    expect(lib.buildTweetWork(tweet, media, dom)).toMatchObject({
+      site: 'twitter',
+      postId: '42',
+      author: 'someone',
+      pageUrl: 'https://x.com/someone/status/42',
+      pages: ['https://pbs.twimg.com/media/A?format=jpg&name=orig', 'https://pbs.twimg.com/media/B?format=png&name=orig'],
+      skippedVideos: 1
+    })
+    // 埋め込み情報が読めなくても、画面の画像で取り込む
+    expect(lib.buildTweetWork(tweet, null, dom)!.pages).toHaveLength(2)
+    expect(lib.buildTweetWork(tweet, null, [])).toBeNull()
+  })
+
+  it('結果の文言に飛ばした動画の数を出す', () => {
+    expect(
+      lib.workResultMessage({ imported: 20, duplicate: 0, failed: 0, ugoira: false, skippedVideos: 2, abort: null })
+    ).toBe('20 枚取り込みました\n動画・GIF 2 件は飛ばしました')
+  })
+})
+
 describe('pixiv', () => {
   it('作品ページの URL から作品 ID を読む', () => {
     expect(lib.parsePixivArtworkPath('https://www.pixiv.net/artworks/146233172')).toBe('146233172')
@@ -110,7 +177,11 @@ describe('pixiv', () => {
       error: false,
       body: [0, 1, 2].map((n) => ({ urls: { original: `https://i.pximg.net/o/1_p${n}.png` } }))
     }
-    expect(lib.parsePixivWork('1', info, pages)).toEqual({
+    expect(lib.parsePixivWork('1', info, pages)).toMatchObject({
+      site: 'pixiv',
+      postId: '1',
+      author: '11',
+      pageUrl: 'https://www.pixiv.net/artworks/1',
       illustId: '1',
       userId: '11',
       title: 't',

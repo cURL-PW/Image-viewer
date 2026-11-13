@@ -2,6 +2,7 @@
  * ページ側の処理。修飾キー＋クリックを拾い、取り込みを背景処理に頼む。
  * 右クリックメニューから取り込むときのために、右クリックした画像も覚えておく。
  * pixiv の作品ページでは、作品の全ページの原寸の URL を pixiv から読んで背景処理に渡す。
+ * X では、投稿の画像をクリックするとその投稿の画像をすべて取り込む (一覧は背景処理が読む)。
  */
 ;(function () {
   'use strict'
@@ -62,6 +63,10 @@
   /** Twitter (X) の投稿者と投稿 ID。画像の入った投稿の、日時のリンクから読む */
   function tweetInfo(img) {
     if (!lib.isTwitterHost(location.hostname)) return null
+    // 画像のリンク先 (…/status/ID/photo/1) がその画像の投稿 (引用された投稿の画像でも取り違えない)
+    const photoLink = img && img.closest('a[href*="/photo/"]')
+    const fromPhoto = photoLink && lib.parseTweetPath(photoLink.getAttribute('href'), location.href)
+    if (fromPhoto) return fromPhoto
     const article = img && img.closest('article')
     if (article) {
       const timeLink = article.querySelector('a[href*="/status/"] time')
@@ -75,6 +80,49 @@
     }
     // 画像を拡大表示している画面 (/ユーザー/status/ID/photo/1) では URL から読む
     return lib.parseTweetPath(location.href)
+  }
+
+  /** X の投稿の画像 (pbs.twimg.com/media/…) か */
+  function isTweetPhoto(img) {
+    return Boolean(img && lib.twitterMediaId(img.currentSrc || img.src))
+  }
+
+  /**
+   * X の投稿の中に出ている画像を、投稿内の順 (…/photo/1, /photo/2 …) に集める。
+   * 引用された別の投稿の画像は、リンク先の投稿 ID が違うので入れない。
+   * 拡大表示の画面 (投稿の枠が無い) では、その画面に出ている画像を集める
+   */
+  function tweetPhotoUrls(img, tweet) {
+    const urls = []
+    const article = img && img.closest('article')
+    if (article) {
+      const found = []
+      for (const anchor of article.querySelectorAll('a[href*="/photo/"]')) {
+        const href = anchor.getAttribute('href') || ''
+        const info = lib.parseTweetPath(href, location.href)
+        if (!info || info.postId !== tweet.postId) continue
+        const index = Number((href.match(/\/photo\/(\d+)/) || [])[1] || 0)
+        for (const photo of anchor.querySelectorAll('img')) {
+          if (isTweetPhoto(photo)) found.push({ index, url: photo.currentSrc || photo.src })
+        }
+      }
+      found.sort((a, b) => a.index - b.index)
+      for (const item of found) urls.push(item.url)
+    } else if (img) {
+      const scope = img.closest('[role="dialog"]') || img.closest('[aria-modal="true"]')
+      for (const photo of scope ? scope.querySelectorAll('img') : []) {
+        if (isTweetPhoto(photo)) urls.push(photo.currentSrc || photo.src)
+      }
+    }
+    if (isTweetPhoto(img) && urls.length === 0) urls.push(img.currentSrc || img.src)
+    return urls
+  }
+
+  /** X の投稿の画像をまとめて取り込むときに、背景処理へ渡す情報 */
+  function tweetRequest(img) {
+    const tweet = tweetInfo(img)
+    if (!tweet) return null
+    return { tweet, domUrls: tweetPhotoUrls(img, tweet) }
   }
 
   /** 取り込みに必要な情報を集める */
@@ -199,6 +247,12 @@
     event.stopImmediatePropagation()
     if (event.type !== 'click') return
     const requestId = remember(img)
+    // X の投稿の画像なら、その投稿の画像をすべて取り込む
+    const tweet = isTweetPhoto(img) ? tweetRequest(img) : null
+    if (tweet) {
+      void api.runtime.sendMessage({ type: 'importTweet', requestId, ...tweet })
+      return
+    }
     const target = pixivTarget(img)
     void (async () => {
       // pixiv の作品ページでは、その作品の全ページを取り込む
@@ -241,6 +295,13 @@
       }
       void loadPixivWork(illustId).then((work) => sendResponse({ requestId: remember(img), work }))
       return true
+    }
+    if (message.type === 'tweetContext') {
+      // 右クリックメニューの「この投稿の画像をすべて取り込む」: 右クリックした画像の投稿を調べる
+      const img = contextTarget
+      const tweet = tweetRequest(img)
+      sendResponse(tweet ? { requestId: remember(img), ...tweet } : { requestId: null })
+      return false
     }
     if (message.type === 'result') {
       const img = pending.get(message.requestId)
